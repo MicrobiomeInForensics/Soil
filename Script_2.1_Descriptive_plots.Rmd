@@ -1,0 +1,1148 @@
+---
+title: "Script_2.1_Descriptive_plots"
+author: ""
+date: "`r Sys.Date()`"
+output: html_document 
+editor_options: 
+  chunk_output_type: console
+---
+# libraries
+```{r}
+library(rstudioapi)
+library(tidyverse) #%>% function
+library(vegan)
+library(ggplot2)
+library(MASS) # isoMDS for NMDS
+library(ggalt) # for geom_encircle
+library(reshape2)
+library(openxlsx)
+library(phyloseq)
+```
+
+```{r setting_WD_to_source_file_location}
+setwd(dirname(getActiveDocumentContext()$path)) #setting Working directory
+print(getwd()) # Checking working directory
+```
+
+# loading data
+```{r load_data}
+tab <- read.csv2("tab.txt", sep = "\t")
+tax_tbl <- read.csv2("taxonomy_filtered.txt", sep = "\t")
+metaData <- read.csv2("metaData.txt", sep = "\t")
+```
+
+```{r apply_common_scaling}
+###apply common scaling
+read_counts<-rowSums(tab)
+smallest<-min(read_counts)
+normal<-smallest/read_counts
+tab_rar<-tab*normal
+```
+
+```{r making_different_subsets}
+# making the subsets based on metaData categories
+metaData_fall <- metaData[!(metaData$timestamp == "P"), ]
+metaData_mF <- metaData[metaData$sample_type == "soil", ]
+metaData_summer <- metaData[(metaData$timestamp == "P"), ]
+metaData_fall_mF <- metaData_fall[metaData_fall$sample_type == "soil", ]
+metaData_summer_mF <- metaData_summer[metaData_summer$sample_type == "soil", ]
+metaData_fall_fabric <- metaData_fall[metaData_fall$sample_type == "fabric", ]
+metaData_summer_fabric <- metaData_summer[metaData_summer$sample_type == "fabric", ]
+common_places <- intersect(metaData_fall$place, metaData_summer$place)
+metaData_fall_summer <- metaData[metaData$place %in%  common_places, ] 
+summer_ABCF <- filter(metaData_fall_summer, Season == "summer")
+fall_ABCF <- filter(metaData_fall_summer, Season == "fall")
+
+# making subsets of ASV tables based on metaData
+tab_rar_mF <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_mF), , drop = FALSE])
+tab_rar_fall <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall), , drop = FALSE])
+tab_rar_fall_mF <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_mF), , drop = FALSE])
+tab_rar_summer <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_summer), , drop = FALSE])
+tab_rar_summer_mF <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_summer_mF), , drop = FALSE])
+tab_rar_fall_fabric <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_fabric), , drop = FALSE])
+tab_rar_summer_fabric <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_summer_fabric), , drop = FALSE])
+tab_rar_fall_summer <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_summer), , drop = FALSE])
+tab_summer_ABCF <- (tab_rar[row.names(tab_rar) %in% row.names(summer_ABCF), , drop = FALSE])
+tab_fall_ABCF <- (tab_rar[row.names(tab_rar) %in% row.names(fall_ABCF), , drop = FALSE])
+
+# removing ASVs not present in any of the samples in each table
+keep<-colSums(tab_rar_mF)>0 
+tab_rar_mF <-tab_rar_mF[,keep]
+
+keep<-colSums(tab_rar_fall)>0 
+tab_rar_fall <-tab_rar_fall[,keep]
+tax_fall <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_mF)>0 
+tab_rar_fall_mF <-tab_rar_fall_mF[,keep]
+tax_fall_mF <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_summer)>0 
+tab_rar_summer <-tab_rar_summer[,keep]
+tax_summer <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_summer_mF)>0 
+tab_rar_summer_mF <-tab_rar_summer_mF[,keep]
+tax_summer_mF <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_summer_fabric)>0 
+tab_rar_summer_fabric <-tab_rar_summer_fabric[,keep]
+tax_summer_fabric <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_fabric)>0 
+tab_rar_fall_fabric <-tab_rar_fall_fabric[,keep]
+tax_fall_fabric <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_summer)>0 
+tab_rar_fall_summer <-tab_rar_fall_summer[,keep]
+tax_fall_summer <-tax_tbl[keep,]
+
+keep<-colSums(tab_summer_ABCF)>0 
+tab_summer_ABCF <-tab_summer_ABCF[,keep]
+tax_summer_ABCF <-tax_tbl[keep,]
+
+keep<-colSums(tab_fall_ABCF)>0 
+tab_fall_ABCF <-tab_fall_ABCF[,keep]
+tax_fall_ABCF <-tax_tbl[keep,]
+```
+
+# General
+## number of ASVs in the datasets
+```{r dimensions_of_data}
+dim(tab_rar)
+dim(tab_rar_fall)
+dim(tab_rar_summer)
+```
+
+## Number of ASVs in each sample
+```{r nASVs}
+nASV <- NULL
+for (i in 1:nrow(tab)){ #counting how many columns contains a value larger that 0 
+  n <- sum(tab[i,] > 0)
+  nASV <- rbind(nASV, n)
+}
+row.names(nASV) <- row.names(tab) # finding the corresponding sample names 
+nASV <- as.data.frame(nASV)
+
+# Finding different stats
+mean(nASV$V1)
+max(nASV$V1)
+```
+
+## Number of unique ASVs for each sample
+```{r unique_ASVs}
+# making a list of all ASVs in each sample
+ASVs_sample <- vector("list", nrow(tab)) # initiate a list that can hold info for all samples
+for (i in 1:nrow(tab)) {
+    col_indices <- which(tab[i, ] > 0) # find which ASVs (columns) are >0 for that sample (row)
+    col_names <- colnames(tab)[col_indices] # find the ASV names 
+    ASVs_sample[[i]] <- col_names # save the info in a list
+}
+
+# Find how common each ASV is
+all_entries <- unlist(ASVs_sample) # makes a vector with all the ASVs>0
+entry_freq <- table(all_entries) # counts the apperance of all ASV names in the vector
+
+
+# Finding ASVs unique for each sample
+unique_entries <- vector("list", length(ASVs_sample)) 
+for (i in seq_along(ASVs_sample)) {
+    current_vec <- ASVs_sample[[i]]
+    unique_in_vec <- current_vec[entry_freq[current_vec] == 1] # finding which of the ASVs for a sample only appears once in the data
+    unique_entries[[i]] <- unique_in_vec # Store result in list
+}
+
+Unique_ASVs <- sapply(unique_entries, length) # find the number of unique ASVs for each sample
+# Stats
+mean(Unique_ASVs)
+max(Unique_ASVs)
+
+# binds with metaData and total number of ASVs per sample to be able to separate samples based on different variables
+info <- cbind(nASV, Unique_ASVs, metaData)
+info <- info %>% # rename some columns 
+rename(Location = place, All_ASVs = V1)
+```
+
+## Finding proportion of NA taxonomic assignment
+```{r NA_counts}
+# Checking NA
+na_counts <- sapply(tax_tbl, function(x) sum(is.na(x)))
+na_counts
+na_percent <- ((na_counts/nrow(tax_tbl))*100)
+print(na_percent)
+```
+
+## Number of ASVs vs nr of reads
+```{r}
+nASV$reads <- rowSums(tab) #total amount of reads for a sample
+nASV$Season <- metaData$Season
+max(nASV$reads)
+min(nASV$reads)
+
+# finding if nr of reads correlates with nr of ASVs for samples
+correlation_result <- cor.test(nASV$V1, nASV$reads, use = "complete.obs")
+correlation_value <- correlation_result$estimate  # Correlation coefficient (R)
+p_value <- correlation_result$p.value 
+print(p_value)
+
+# Dot plot to visualize nr of reads and nr of ASVs
+Dot_Plot_nrASVs_vs_nrReads <- ggplot(nASV, aes(x = V1, y = reads, color = Season)) +
+  geom_point(size = 5) +
+  labs(title = paste("Dot Plot of number of ASVs vs number of reads\nCorrelation R:", round(correlation_value, 2)),
+       x = "Number of ASVS",
+       y = "Number of Reads") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 30, face = "bold"),  # Increase title size
+    axis.title.x = element_text(size = 25),                # X-axis title size
+    axis.title.y = element_text(size = 25),                # Y-axis title size
+    axis.text.x = element_text(size = 20),                 # X-axis tick labels size
+    axis.text.y = element_text(size = 20),                 # Y-axis tick labels size
+    legend.title = element_text(size = 30),                # Legend title size
+    legend.text = element_text(size = 25)) +                  # Legend text size
+    scale_color_discrete(name = "Season")
+
+png("results/Dot_Plot_nrASVs_vs_nrReads.png", width = 1800, height = 1000)
+print(Dot_Plot_nrASVs_vs_nrReads)
+dev.off()
+```
+
+# bacterial abundance charts
+```{r}
+
+metaData_ps <- metaData %>%
+  mutate(loc_season = paste0(metaData$place, "_", metaData$Season))
+# prepairing data for phyloseq
+tab_t <- t(tab_rar)
+tax <- as.matrix(tax_tbl)
+identical(row.names(tab_t), row.names(tax))
+identical(colnames(tab_t), row.names(metaData_ps))
+
+# Making the phyloseq object
+ps <- phyloseq(otu_table(tab_t, taxa_are_rows=T), 
+                  sample_data(metaData_ps), 
+                  tax_table(tax))
+
+ps_class <- tax_glom(ps, "Class") # Collapse abundance to class level
+class_abundance <- psmelt(ps_class) # make data more suited for plotting
+
+# Group abundance by location and sampling season
+ps_summary <- class_abundance %>%
+  group_by(loc_season, Class) %>%
+  summarise(Abundance = sum(Abundance)) %>%
+  ungroup()
+
+# Normalize the abundance data within each loc_season 
+ps_summary <- ps_summary %>%
+  group_by(loc_season) %>%
+  mutate(Abundance = Abundance / sum(Abundance)) %>%
+  ungroup()
+print(sum(ps_summary$Abundance))
+
+# Sort the classes within each place based on the abundance within that place
+ps_summary <- ps_summary %>%
+  group_by(loc_season) %>%
+  arrange(loc_season, desc(Abundance)) %>%
+  mutate(Class = factor(Class, levels = unique(Class))) %>%
+  ungroup()
+
+
+frg <- c(
+  "blue", "green", "cyan", "orangered", "moccasin", "tan1", "oldlace", "darkgoldenrod4",
+  "tomato", "yellow", "mediumorchid", "lightseagreen", "black", "magenta", 
+  "darkorange", "deepskyblue4", "royalblue4", "pink", "lightgreen", "darkred", 
+  "gold", "darkgray", "lightblue", "chocolate", "darkcyan", "khaki", "coral", 
+  "brown", "darkgreen", "darkviolet", "springgreen4", "lightpink", "snow4", 
+  "mediumseagreen", "saddlebrown", "gray", "steelblue", "turquoise", "tomato", 
+  "violet", "yellowgreen", "olivedrab", "orange", "firebrick", "plum", 
+  "limegreen", "indianred", "hotpink", "lawngreen", "mediumblue", "dodgerblue", 
+  "forestgreen", "mediumvioletred", "midnightblue", "navy", "orchid", 
+  "palevioletred", "peru", "rosybrown", "royalblue", "salmon", "sienna", 
+  "skyblue", "slateblue", "springgreen", "tan", "thistle","darkkhaki", 
+  "burlywood", "cadetblue", "chartreuse", "darkgoldenrod1", "darkmagenta",   
+  "darksalmon", "darkslateblue", "darkslategray", "deepskyblue", "dimgray", 
+  "gainsboro", "goldenrod", "honeydew", "lavender", "lavenderblush", 
+  "lightcoral", "lightcyan", "lightgoldenrodyellow", "lightgrey", 
+  "lightsteelblue", "lightsalmon", "lightyellow", "maroon", "mintcream", 
+  "red", "navajowhite", "darkblue", "peachpuff", "powderblue", 
+  "violetred4", "seagreen", "slategrey", "snow", "blueviolet", "wheat", 
+  "white", "whitesmoke", "red4", "lightgoldenrod"
+)
+
+# Make the abundance chart
+Class_abundance_plot <- ggplot(ps_summary %>% group_by(loc_season) %>% arrange(-Abundance, by_group = TRUE), aes(fill = Class, x = Abundance, y = loc_season, group = loc_season)) +  # Switch x and y
+  geom_col() +   
+  scale_fill_manual(values = frg) + 
+  theme_minimal() + 
+  labs(title = "Taxonomic Composition at Class Level",
+       x = "Relative Abundance",  # Update axis labels
+       y = "Location and sampling season",
+       fill = "Bacterial Class Taxonomy") + 
+  scale_fill_manual(values = frg, guide = guide_legend(ncol = 7, title.position = "top")) +
+  theme(plot.title = element_text(size = 40, face = "bold"),
+        axis.title.x = element_text(size = 30),             
+        axis.title.y = element_text(size = 30),             
+        axis.text.x = element_text(size = 30),
+        axis.text.y = element_text(size = 30, angle = 0, hjust = 0.5, vjust = 0.5),  # Rotate y-axis text
+        legend.title = element_text(size = 30, face = "bold"),             
+        legend.text = element_text(size = 30),
+        legend.position = "bottom"  # Move the legend below the plot
+  )
+
+
+png("results/Class_abundance_plot.png", width = 2400, height = 1700)
+print(Class_abundance_plot)
+dev.off()
+```
+
+## Find abundance of bacterial classes in dataset
+```{r}
+most_abundant_classes <- ps_summary %>%
+  group_by(Class) %>%
+  summarise(Total_Abundance = sum(Abundance)) %>%
+  mutate(Relative_Abundance = 100 * Total_Abundance / sum(Total_Abundance)) %>%
+  arrange(desc(Relative_Abundance))
+
+```
+
+
+# Summer analysis 
+
+## NMDS
+```{r colors}
+# Making a common colorsceme for all 15 locations in the study
+frg <- c("blue","green","black","brown1","deeppink","violetred4","gold","darkgoldenrod4", "darkorange", "mediumorchid4","forestgreen","lightseagreen","magenta", "red" , "cyan")
+# Create a named vector for colors
+unique_locations <- unique(metaData$place)
+color_mapping <- setNames(frg[1:length(unique_locations)], unique_locations)
+```
+
+## NMDS for summer
+```{r NMDS_sommer}
+tab_dist_s <-as.matrix(vegdist(tab_rar_summer, method = "bray")) #making distance matrix with eucledian distances
+mod_s <-isoMDS(tab_dist_s) #making NMDS coordinates (model) from the distances
+stress_s <- mod_s$stress # finding how well the data fits
+
+# prepairing data to plot
+NMDS_data_s <- data.frame(Dim1 = mod_s$points[,1], Dim2 = mod_s$points[,2], Location = factor(metaData_summer$place), sample_type = factor(metaData_summer$sample_type))
+
+# Making the NMDS
+NMDS_plot_s <- ggplot(NMDS_data_s, aes(x = Dim1, y = Dim2, color = Location)) +
+  geom_point(aes(shape = sample_type), size = 6) +  # Adjust point size as needed
+    scale_color_manual(values = color_mapping) +
+  geom_encircle(aes(group = Location, fill = Location), 
+                color = NA,  # Optional: No border for the encircling lines
+                alpha = 0.2, # Transparency of the fill
+                s_shape = 1, 
+                expand = 0.01) + # Control the tightness of the encircling lines
+  scale_fill_manual(values = color_mapping) +
+  labs(x = '', y = '', shape = 'Sample Type') +  # Axis labels
+  theme_minimal() +
+  theme(
+    text = element_text(size = 30),  # Global text size
+    axis.title = element_text(size = 30),  # Axis titles
+    axis.text = element_text(size = 30),  # Axis text
+    legend.title = element_text(size = 30),  # Legend title
+    legend.text = element_text(size = 30)   # Legend text
+  )
+png("results/NMDS_plot_Sommer.png", width = 1800, height = 1000)
+print(NMDS_plot_s)
+dev.off()
+```
+
+
+##  Bray-Curtis distances between Summer locations
+```{r}
+bray_curtis_summer_table <- data.frame(Group1 = character(), Group2 = character(),
+                                MeanBrayCurtis = numeric(), stringsAsFactors = FALSE)
+# Calculate Bray-Curtis dissimilarity
+    bc_dist <- vegdist(tab_rar_summer, method = "bray")
+    unique_groups <- unique(metaData_summer$place)
+
+# Loop over each pair of locations
+for (i in 1:(length(unique_groups))) {
+  for (j in (i):length(unique_groups)) {
+    
+    group1 <- unique_groups[i]
+    group1 <- rownames(filter(metaData_summer, place == group1)) 
+    group2 <- unique_groups[j]
+    group2 <- rownames(filter(metaData_summer, place == group2))
+    
+    # Convert to matrix and extract distances between groups
+    bc_matrix <- as.matrix(bc_dist)
+    group1_indices <- rownames(bc_matrix) %in% group1
+    group2_indices <- colnames(bc_matrix) %in% group2
+    between_group_distances <- bc_matrix[group1_indices, group2_indices]
+ 
+    between_group_distances[between_group_distances == 0] <- NA # Assumes that only self comparisons are exactly 0
+    mean_bc <- mean(between_group_distances, na.rm = TRUE)
+    
+    # Store result
+    bray_curtis_summer_table <- rbind(bray_curtis_summer_table,
+                               data.frame(Group1 = unique(metaData_summer$place)[i], Group2 = unique(metaData_summer$place)[j], MeanBrayCurtis = mean_bc))
+  }
+}
+```
+
+```{r Bray-Curtis_within_VS_between_locations}
+
+# Initialize an empty data frame to store results
+bray_curtis <- data.frame(Group1 = character(), Group2 = character(),
+                                MeanBrayCurtis = numeric(), stringsAsFactors = FALSE)
+bc <- melt(as.matrix(bc_dist))
+# Distances within Locations
+bc_same <- bc %>%
+  filter(substr(Var1, 1, 1) == substr(Var2, 1, 1))
+   bc_same$value[bc_same$value == 0] <- NA
+# Distances between Kocations
+bc_different <- bc %>%
+  filter(!(substr(Var1, 1, 1) == substr(Var2, 1, 1)))
+
+# Test if there is significant differences 
+wilcox.test(bc_different$value, bc_same$value, alternative = "two.sided")   
+```
+
+## PERMANOVA 
+### Global permanova
+
+```{r PERMANOVA_all}
+set.seed(2)
+# Global PERMANOVA
+permanova_all <- adonis2(tab_rar_summer ~ metaData_summer$place * metaData_summer$sample_type, permutations = 9999, method = "bray")
+Global_PERMANOVA_Summer <- as.data.frame(permanova_all)
+
+# Testing if the locations have significantly different within-group dispersions
+d.bc <- vegdist(tab_rar_summer, method = "bray")
+within.disp <- betadisper(d.bc, metaData_summer$place)
+print(within.disp)
+tst.w <- permutest(within.disp)
+print(tst.w)
+```
+
+### Pairwise PERMANOVA
+```{r pairwise_permanova}
+set.seed(2)
+ids1 <- row.names(tab_rar_summer)
+samplegroup <- c()
+for (i in 1:length(ids1)){
+  if(substring(ids1[i],1,1)=='A')samplegroup[i]<-1
+  if(substring(ids1[i],1,1)=='B')samplegroup[i]<-2
+  if(substring(ids1[i],1,1)=='C')samplegroup[i]<-3
+  if(substring(ids1[i],1,1)=='E')samplegroup[i]<-4
+  if(substring(ids1[i],1,1)=='F')samplegroup[i]<-5
+  if(substring(ids1[i],1,1)=='G')samplegroup[i]<-6
+  }
+permanova_tbl <- data.frame(group1 = character(), group2 = character(), p_value = numeric(), statistic = numeric())
+
+# Loop through each pair of groups
+for (group1 in unique(samplegroup)) {
+  for (group2 in unique(samplegroup)) {
+    if (group1 == group2) {
+      next  # Skip if comparing the same group
+    }
+    keep <- which(samplegroup %in% c(group1, group2)) # Subset for the current pair of groups
+    
+    # Subset the data based on the keep indices
+    tbl <- tab_rar_summer[keep,]
+    group <- samplegroup[keep]
+    sampletype <- metaData_summer$sample_type[keep]
+    
+    # Perform PERMANOVA
+    permanova_result <- adonis2(tbl ~ group * sampletype, permutations = 9999, method = "bray")
+    permanova_df <- as.data.frame(permanova_result)
+
+    # Add group names to the results
+    permanova_df$group1 <- group1
+    permanova_df$group2 <- group2
+    
+    # Append the permanova_df to the main results table
+    permanova_tbl <- rbind(permanova_tbl, permanova_df)
+  }
+}
+permanova_tbl$padj <- p.adjust(permanova_tbl$`Pr(>F)`, method="BH")
+group_list <- c(1:6)
+place_list <- c("A", "B", "C", "E", "F", "G")
+samplegroup_tbl <- as.data.frame(t(rbind(group_list, place_list)))
+
+permanova_tbl$type <- row.names(permanova_tbl)
+permanova_tbl <- merge(permanova_tbl, samplegroup_tbl, by.x = "group1", by.y= "group_list")
+permanova_tbl <- merge(permanova_tbl, samplegroup_tbl, by.x = "group2", by.y= "group_list")
+
+permanova_tbl <- permanova_tbl %>%
+  mutate(place1 = permanova_tbl$place_list.x, place2 = permanova_tbl$place_list.y)%>%
+  subset(select= -c(place_list.x,place_list.y, group1, group2))
+
+#formating results table
+pairwise_summer_permanova_tbl <- na.omit(permanova_tbl)
+pairwise_summer_permanova_tbl$type <- gsub("[0-9]+", "", pairwise_summer_permanova_tbl$type) 
+pairwise_summer_permanova_tbl[,2:6] <- round(pairwise_summer_permanova_tbl[,2:6], 4) #round 
+
+#table with only significant results
+permanova_tbl1_0.5 <-pairwise_summer_permanova_tbl[pairwise_summer_permanova_tbl$`padj`<0.05,]
+table(permanova_tbl1_0.5$place1)
+
+#sorting the table alphabetically 
+pairwise_summer_permanova_tbl <- pairwise_summer_permanova_tbl[order(pairwise_summer_permanova_tbl$type),]
+pairwise_summer_permanova_tbl <- pairwise_summer_permanova_tbl[order(pairwise_summer_permanova_tbl$place2),]
+pairwise_summer_permanova_tbl <- pairwise_summer_permanova_tbl[order(pairwise_summer_permanova_tbl$place1),]
+
+# Saving table as xlxs file
+write.xlsx(pairwise_summer_permanova_tbl, file = "pairwise_summer_permanova_tbl.xlsx")
+```
+
+# Fall data analysis
+
+## NMDS plot 
+
+### plot with all samples 
+```{r nMDS_plot}
+tab_dist_f <-as.matrix(vegdist(tab_rar_fall, method = "bray"))
+mod_f <-isoMDS(tab_dist_f) #making NMDS coordinates (model) from the distances
+mod_f$stress
+
+NMDS_data_f <- data.frame(Dim1 = mod_f$points[,1], Dim2 = mod_f$points[,2], Location = factor(metaData_fall$place),
+  sample_type = factor(metaData_fall$sample_type),  Time = factor(metaData_fall$timestamp))
+
+NMDS_plot <- ggplot(NMDS_data_f, aes(x = Dim1, y = Dim2, color = Location)) +
+  geom_point(aes(shape = Time), size = 6) +  
+  scale_color_manual(values = color_mapping) +
+  geom_encircle(aes(group = Location, fill = Location), color = NA,  alpha = 0.2, s_shape = 1,expand = 0.01) +   geom_point(data = subset(NMDS_data_f, sample_type == "fabric"),aes(shape = Time), color = "white", fill = NA, size = 5, stroke = 2.5, shape = 21  ) +
+  scale_fill_manual(values = color_mapping) +
+  labs(x = ' ', y = ' ', shape = 'Sampling day') +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 30),
+    axis.title = element_text(size = 30),
+    axis.text = element_text(size = 30),
+    legend.title = element_text(size = 30),
+    legend.text = element_text(size = 30)
+  )
+png("results/NMDS_plot_all_fall_samples.png", width = 1800, height = 1000)
+print(NMDS_plot)
+dev.off()
+```
+
+### NMDS fall subsets of locations  
+
+```{r nMDS_plot}
+
+metaData_fall_subset <- filter(metaData_fall, place %in% c("B", "C")) # select locations here
+tab_rar_fall_loc_subset <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_subset), , drop = FALSE])
+
+tab_dist_f <-as.matrix(vegdist(tab_rar_fall_loc_subset, method = "bray"))
+mod_f <-isoMDS(tab_dist_f) #making NMDS coordinates (model) from the distances
+
+NMDS_data_f <- data.frame(Dim1 = mod_f$points[,1], Dim2 = mod_f$points[,2], Location = factor(metaData_fall_subset$place), sample_type = factor(metaData_fall_subset$sample_type))
+
+NMDS_plot <- ggplot(NMDS_data_f, aes(x = Dim1, y = Dim2, color = Location)) +
+  geom_point(aes(shape = sample_type), size = 4) +  # Adjust point size as needed
+    scale_color_manual(values = frg) +
+  geom_encircle(aes(group = Location, fill = Location), 
+                color = NA,  
+                alpha = 0.2, # Transparency of the fill
+                s_shape = 1, 
+                expand = 0) + # Control the tightness of the encircling lines
+  scale_fill_manual(values = frg) +
+  labs(x = 'Dimension 1', y = 'Dimension 2', shape = 'Sample Type') +  # Axis labels
+  theme(text = element_text(size = 30),  # Global text size
+    axis.title = element_text(size = 30),  # Axis titles
+    axis.text = element_text(size = 30),  # Axis text
+    legend.title = element_text(size = 30),  # Legend title
+    legend.text = element_text(size = 30)   # Legend text
+  )
+
+print(NMDS_plot)
+mod_f$stress
+```
+
+## PERMANOVA
+
+###  Global PERMANOVA
+```{r PERMANOVA_all}
+set.seed(2)
+Global_PERMANOVA_fall <- as.data.frame(adonis2(tab_rar_fall ~ metaData_fall$place * metaData_fall$sample_type * metaData_fall$timestamp, permutations = 9999, method = "bray"))
+
+# investigating differences in within-group sample dispersion
+d.bc <- vegdist(tab_rar_fall, method = "bray")
+within.disp <- betadisper(d.bc, metaData_fall$place)
+print(within.disp)
+tst.w <- permutest(within.disp)
+print(tst.w)
+
+# finding which locations have significant differences in within-group dispersion
+tukey_results <- TukeyHSD(within.disp)
+print(tukey_results)
+
+table1 <- as.data.frame(tukey_results$group)
+table_signif <- table1[table1$`p adj`<0.05,]
+```
+
+```{r pairwise_permanova}
+set.seed(2)
+ids1 <- row.names(tab_rar_fall)
+
+samplegroup <- c()
+for (i in 1:length(ids1)){
+  if(substring(ids1[i],1,1)=='A')samplegroup[i]<-1
+  if(substring(ids1[i],1,1)=='B')samplegroup[i]<-2
+  if(substring(ids1[i],1,1)=='C')samplegroup[i]<-3
+  if(substring(ids1[i],1,1)=='F')samplegroup[i]<-4
+  if(substring(ids1[i],1,1)=='H')samplegroup[i]<-5
+  if(substring(ids1[i],1,1)=='I')samplegroup[i]<-6
+  if(substring(ids1[i],1,1)=='J')samplegroup[i]<-7
+  if(substring(ids1[i],1,1)=='K')samplegroup[i]<-8
+  if(substring(ids1[i],1,1)=='L')samplegroup[i]<-9
+  if(substring(ids1[i],1,1)=='N')samplegroup[i]<-10
+  if(substring(ids1[i],1,1)=='P')samplegroup[i]<-11
+  if(substring(ids1[i],1,1)=='Q')samplegroup[i]<-12
+  if(substring(ids1[i],1,1)=='R')samplegroup[i]<-13
+}
+permanova_tbl <- data.frame(group1 = character(), group2 = character(), p_value = numeric(), statistic = numeric())
+
+# Loop through each pair of groups
+for (group1 in unique(samplegroup)) {
+  for (group2 in unique(samplegroup)) {
+    if (group1 == group2) {
+      next  # Skip if comparing the same group
+    }
+    
+    # Subset samplegroup for the current pair of groups
+    keep <- which(samplegroup %in% c(group1, group2))
+    
+    # Subset the data based on the keep indices
+    tbl <- tab_rar_fall[keep,]
+    group <- samplegroup[keep]
+    sampletype <- metaData_fall$sample_type[keep]
+    timestamp <- metaData_fall$timestamp[keep]
+   
+    # Perform PERMANOVA
+    permanova_result <- adonis2(tbl ~ group*sampletype*timestamp, permutations = 9999, method = "bray")
+    
+permanova_df <- as.data.frame(permanova_result)
+
+    # Add group names to the results
+    permanova_df$group1 <- group1
+    permanova_df$group2 <- group2
+    
+    # Append the permanova_df to the main results table
+    permanova_tbl <- rbind(permanova_tbl, permanova_df)
+  }
+}
+permanova_tbl$padj <- p.adjust(permanova_tbl$`Pr(>F)`, method="BH")
+
+# Linking Samplegroup nr back to location 
+group_list <- c(1:13)
+place_list <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+samplegroup_tbl <- as.data.frame(t(rbind(group_list, place_list)))
+permanova_tbl$type <- row.names(permanova_tbl) # 
+permanova_tbl <- merge(permanova_tbl, samplegroup_tbl, by.x = "group1", by.y= "group_list")
+permanova_tbl <- merge(permanova_tbl, samplegroup_tbl, by.x = "group2", by.y= "group_list")
+
+#remove coluns not in use
+permanova_tbl <- permanova_tbl %>%
+  mutate(place1 = permanova_tbl$place_list.x, place2 = permanova_tbl$place_list.y)%>%
+  subset(select= -c(place_list.x,place_list.y, group1, group2))
+
+# Cleaning results table
+pairwise_fall_permanova_tbl <- na.omit(permanova_tbl) #removing rows not showing explanatory variables
+pairwise_fall_permanova_tbl$type <- gsub("[0-9]+", "", pairwise_fall_permanova_tbl$type)  # Removing nr from type column
+pairwise_fall_permanova_tbl[,2:6] <- round(pairwise_fall_permanova_tbl[,2:6], 4)
+
+# Ordering table
+pairwise_fall_permanova_tbl <- pairwise_fall_permanova_tbl[order(pairwise_fall_permanova_tbl$type),]
+pairwise_fall_permanova_tbl <- pairwise_fall_permanova_tbl[order(pairwise_fall_permanova_tbl$place2),]
+pairwise_fall_permanova_tbl <- pairwise_fall_permanova_tbl[order(pairwise_fall_permanova_tbl$place1),]
+
+# table with only significant results
+permanova_tbl1_0.5 <- pairwise_fall_permanova_tbl[pairwise_fall_permanova_tbl$`padj`<0.05,]
+# Check which locations do not show significant differences caused by location
+permanova_sign_fall_loc <- filter(permanova_tbl1_0.5, type == "group")
+table(permanova_sign_fall_loc$place1)
+
+
+#write xlxs file
+write.xlsx(pairwise_fall_permanova_tbl, file = "pairwise_fall_permanova_tbl.xlsx")
+```
+
+
+##  Bray-Curtis distances between fall locations
+```{r}
+# Initialize an empty data frame to store results
+bray_curtis_fall_table <- data.frame(Group1 = character(), Group2 = character(),
+                                MeanBrayCurtis = numeric(), stringsAsFactors = FALSE)
+# Compute Bray-Curtis distances
+    bc_dist <- vegdist(tab_rar_fall, method = "bray")
+    
+    # Get Location identifiers
+unique_groups <- unique(metaData_fall$place)
+
+# Loop over each pair of Locations
+for (i in 1:(length(unique_groups))) {
+  for (j in (i):length(unique_groups)) {
+    
+    group1 <- unique_groups[i]
+    group1 <- rownames(filter(metaData_fall, place == group1)) 
+    group2 <- unique_groups[j]
+    group2 <- rownames(filter(metaData_fall, place == group2))
+    
+    # Convert to matrix and extract distances between groups
+    bc_matrix <- as.matrix(bc_dist)
+    group1_indices <- rownames(bc_matrix) %in% group1
+    group2_indices <- colnames(bc_matrix) %in% group2
+    between_group_distances <- bc_matrix[group1_indices, group2_indices]
+ 
+    # Remove distances between the same sample
+    between_group_distances[between_group_distances == 0] <- NA # Assumes that only self comparisons are exactly 0
+    mean_bc <- mean(between_group_distances, na.rm = TRUE)
+    
+    # Store result
+    bray_curtis_fall_table <- rbind(bray_curtis_fall_table,
+                               data.frame(Group1 = unique(metaData_fall$place)[i], Group2 = unique(metaData_fall$place)[j], MeanBrayCurtis = mean_bc))
+  }
+}
+
+bray_curtis <- data.frame(Group1 = character(), Group2 = character(),
+                                MeanBrayCurtis = numeric(), stringsAsFactors = FALSE)
+
+# Finding if Bray-curtis distances within locations are different from between locations
+    bc_dist <- vegdist(tab_rar_fall_mF, method = "bray")
+    bc <- melt(as.matrix(bc_dist))
+#within locations
+bc_same <- bc %>%
+  filter(substr(Var1, 1, 1) == substr(Var2, 1, 1))
+   bc_same$value[bc_same$value == 0] <- NA
+# between locations
+   bc_different <- bc %>%
+  filter(!(substr(Var1, 1, 1) == substr(Var2, 1, 1)))
+
+# testing the if there is a difference
+ wilcox.test(bc_different$value, bc_same$value, alternative = "two.sided")   
+```
+
+##  Bray-Curtis distances between fall timepoints
+```{r}
+# to store results 
+bray_curtis_fall_time_table <- data.frame(Location = character(), time1 = character(), time2 = character(), MeanBrayCurtis = numeric(), stringsAsFactors = FALSE)
+
+      # Get unique group identifiers
+unique_groups <- unique(metaData_fall_mF$place)
+time <- unique(metaData_fall_mF$timestamp)
+
+# Comparing samples from different timepoints within Locations
+for (k in 1:(length(unique_groups))) {
+for (i in 1:(length(time))) {
+  for (j in (i):length(time)) {
+    
+    Location <- unique_groups[k]
+    group1 <- time[i]
+    group1 <- rownames(filter(metaData_fall_mF, timestamp == group1 & place == unique_groups[k]))
+    group2 <- time[j]
+    group2 <- rownames(filter(metaData_fall_mF, timestamp == group2 & place == unique_groups[k]))
+    
+    # Convert to matrix and extract distances between groups
+    bc_matrix <- as.matrix(bc_dist)
+    group1_indices <- rownames(bc_matrix) %in% group1
+    group2_indices <- colnames(bc_matrix) %in% group2
+    between_group_distances <- bc_matrix[group1_indices, group2_indices]
+
+    # remove self "compairisons"
+    between_group_distances[between_group_distances == 0] <- NA # Assumes that only self compairisons are exactly 0
+    mean_bc <- mean(between_group_distances, na.rm = TRUE)
+    
+    # Store result
+    bray_curtis_fall_time_table <- rbind(bray_curtis_fall_time_table,
+                               data.frame(Location = unique_groups[k],time1 = time[i], time2 = time[j], MeanBrayCurtis = mean_bc))
+  }
+}
+}
+# Sorting distances by time
+same_time <- bray_curtis_fall_time_table[bray_curtis_fall_time_table$time1 == bray_curtis_fall_time_table$time2, ]
+
+different_time <- bray_curtis_fall_time_table[bray_curtis_fall_time_table$time1 != bray_curtis_fall_time_table$time2, ]
+# testing if there is a difference between samples collected at the same time vs different times
+wilcox.test(same_time$MeanBrayCurtis, different_time$MeanBrayCurtis, alternative = "two.sided")
+```
+
+# Season
+
+## Wilcoxon rank-sum test to se differenses in number of ASVs and readcounts between summer and fall samples
+
+```{r}
+# Finding nr reads and ASVs for summer samples (not scaled)
+summer_data <- tab[grep("_P$", row.names(tab)), ]
+summer_info <- as.data.frame(row.names(summer_data))
+summer_info$total_reads <- rowSums(summer_data)
+summer_info$nrASVs <- rowSums(summer_data > 0)
+
+# Finding nr of reads and ASVs for fall samples (not scaled)
+fall_data <- tab[!grepl("_P$", row.names(tab)), ]
+fall_info <- as.data.frame(row.names(fall_data))
+fall_info$total_reads <- rowSums(fall_data)
+fall_info$nrASVs <- rowSums(fall_data > 0)
+
+# Different stats
+mean(summer_info$total_reads)
+mean(fall_info$total_reads)
+mean(summer_info$nrASVs)
+mean(fall_info$nrASVs)
+
+# Perform Wilcoxon rank-sum test
+## Difference in sequencing depth
+sequencing_depth_result <- wilcox.test(fall_info$total_reads, summer_info$total_reads, alternative = "two.sided")
+print(sequencing_depth_result)
+
+## Difference in nr of ASVs
+nrASVs_result <- wilcox.test(fall_info$nrASVs, summer_info$nrASVs, alternative = "two.sided")
+print(nrASVs_result)
+```
+
+### Rarefraction
+```{r Rarefaction_curve}
+
+keep<-colSums(fall_data)>0 
+table(keep)
+fall_data <-fall_data[,keep]
+
+keep<-colSums(summer_data)>0 
+table(keep)
+summer_data <-summer_data[,keep]
+
+# Rarefying summer data to mean read counts for fall data
+fall_mean_reads <- mean(fall_info$total_reads)
+rarefied_data <- as.data.frame(rrarefy(summer_data, fall_mean_reads))
+print(rowSums(rarefied_data))
+
+
+rarefied_data$nrASVs <- rowSums(rarefied_data > 0)
+print(rarefied_data$nrASVs)
+print(summer_info$nrASVs)
+
+# Testing if there is a difference in nr of ASVs between fall data and rarefied summer data
+nrASVs_rarefied_result <- wilcox.test(fall_info$nrASVs, rarefied_data$nrASVs, alternative = "two.sided")
+print(nrASVs_rarefied_result)
+```
+
+## Taxa only found in one season
+```{r}
+#taxa only found in summer
+unique_summer_class <- unique(tax_summer_ABCF$Class[!tax_summer_ABCF$Class %in% tax_fall$Class]) 
+print(unique_summer_class)
+# taxa only found in fall
+unique_fall_class <- unique(tax_fall_ABCF$Class[!tax_fall_ABCF$Class %in% tax_summer$Class])
+print(unique_fall_class)
+
+# Checking how common the seasonal taxa is (how many samples)
+tax_Corio <- subset(tax_summer, Class == "Coriobacteriia")
+coribacteriia_nr_samples <- tab_rar_summer[rowSums(tab_rar_summer[, c(row.names(tax_Corio))] > 0) > 0, ]
+tax_Corio <- row.names(tax_Corio)
+Corio <- tab_rar[ ,colnames(tab_rar) %in% tax_Corio ]
+Corio <- Corio[rowSums(Corio) != 0, ]
+
+tax_Desulfobulbia <- subset(tax_fall, Class == "Desulfobulbia")
+tax_Desulfobulbia <- row.names(tax_Desulfobulbia)
+Desulfobulbia <- tab_rar[, colnames(tab_rar) %in% tax_Desulfobulbia, drop = FALSE]
+
+tax_Campylobacteria <- subset(tax_tbl, Class == "Campylobacteria")
+tax_Campylobacteria <- row.names(tax_Campylobacteria)
+Campylobacteria <- tab_rar[ ,colnames(tab_rar) %in% tax_Campylobacteria, drop = FALSE ]
+Campylobacteria <- Campylobacteria[rowSums(Campylobacteria) != 0, ]
+
+tax_Gitt <- subset(tax_tbl, Class == "Gitt-GS-136")
+tax_Gitt <- row.names(tax_Gitt)
+Gitt <- tab_rar[ ,colnames(tab_rar) %in% tax_Gitt, drop = FALSE ]
+Gitt <- Gitt[rowSums(Gitt) != 0, ]
+
+tax_archea <- subset(tax_tbl, Kingdom == "Archaea")
+tax_Thermoplasmata <- subset(tax_tbl, Class == "Thermoplasmata")
+tax_Thermoplasmata <- row.names(tax_Thermoplasmata)
+Thermoplasmata <- tab_rar[ ,colnames(tab_rar) %in% tax_Thermoplasmata, drop = FALSE ]
+Thermoplasmata <- Thermoplasmata[rowSums(Thermoplasmata) != 0, ]
+```
+
+
+## NMDS
+## NMDS for summer + fall
+```{r NMDS_plot}
+#NMDS plot
+tab_dist_sf <-as.matrix(vegdist(tab_rar_fall_summer, method = "bray")) #making distance matrix with eucledian distances
+mod_sf <-isoMDS(tab_dist_sf) #making NMDS coordinates (model) from the distances
+mod_sf$stress
+
+NMDS_data_sf <- data.frame(Dim1 = mod_sf$points[,1], Dim2 = mod_sf$points[,2], Location = factor(metaData_fall_summer$place), season = factor(metaData_fall_summer$Season))
+
+NMDS_plot_sf <- ggplot(NMDS_data_sf, aes(x = Dim1, y = Dim2, color = Location)) +
+  geom_point(aes(shape = season), size = 4) +  # Adjust point size as needed
+    scale_color_manual(values = color_mapping) +
+  geom_encircle(aes(group = Location, fill = Location), 
+                color = NA,  # Optional: No border for the encircling lines
+                alpha = 0.2, # Transparency of the fill
+                s_shape = 1, 
+                expand = 0) + # Control the tightness of the encircling lines
+    scale_fill_manual(values = frg) +
+  labs(x = ' ', y = ' ', shape = 'Season') +  # Axis labels
+  theme(
+    text = element_text(size = 30),  # Global text size
+    axis.title = element_text(size = 30),  # Axis titles
+    axis.text = element_text(size = 30),  # Axis text
+    legend.title = element_text(size = 30),  # Legend title
+    legend.text = element_text(size = 30)   # Legend text
+  )
+
+png("results/NMDS_plot_summer_and_fall.png", width = 1800, height = 1000)
+print(NMDS_plot_sf)
+dev.off()
+```
+
+## PERMANOVA
+```{r PERMANOVA_all}
+set.seed(2)
+Global_PERMANOVA_Season <- as.data.frame(adonis2(tab_rar_fall_summer ~ metaData_fall_summer$place * metaData_fall_summer$sample_type * metaData_fall_summer$Season, permutations = 9999, method = "bray"))
+
+# investigating differences in within-group sample dispersion
+d.bc <- vegdist(tab_rar_fall_summer, method = "bray")
+within.disp <- betadisper(d.bc, metaData_fall_summer$place)
+print(within.disp)
+tst.w <- permutest(within.disp)
+print(tst.w)
+
+# finding which locations have significant differences in within-group dispersion
+tukey_results <- TukeyHSD(within.disp)
+print(tukey_results)
+tukey <- as.data.frame(tukey_results$group)
+
+d.bc <- vegdist(tab_rar_fall_summer, method = "bray")
+within.disp <- betadisper(d.bc, metaData_fall_summer$Season)
+print(within.disp)
+tst.w <- permutest(within.disp)
+print(tst.w)
+```
+
+```{r pairwise_permanova}
+set.seed(2)
+ids1 <- row.names(tab_rar_fall_summer)
+samplegroup <- c()
+for (i in 1:length(ids1)){
+  if(substring(ids1[i],1,1)=='A')samplegroup[i]<-1
+  if(substring(ids1[i],1,1)=='B')samplegroup[i]<-2
+  if(substring(ids1[i],1,1)=='C')samplegroup[i]<-3
+  if(substring(ids1[i],1,1)=='E')samplegroup[i]<-4
+  if(substring(ids1[i],1,1)=='F')samplegroup[i]<-5
+  if(substring(ids1[i],1,1)=='G')samplegroup[i]<-6
+  }
+permanova_tbl <- data.frame(group1 = character(), group2 = character(), p_value = numeric(), statistic = numeric())
+
+# Loop through each pair of groups
+for (group1 in unique(samplegroup)) {
+  for (group2 in unique(samplegroup)) {
+    if (group1 == group2) {
+      next  # Skip if comparing the same group
+    }
+    
+    # Subset samplegroup for the current pair of groups
+    keep <- which(samplegroup %in% c(group1, group2))
+    
+    # Subset the data based on the keep indices
+    tbl <-tab_rar_fall_summer[keep,]
+    group <- samplegroup[keep]
+    sampletype <- metaData_fall_summer$sample_type[keep]
+    Season <- metaData_fall_summer$Season[keep]
+   
+    # Perform PERMANOVA
+    permanova_result <- adonis2(tbl ~ group*sampletype*Season, permutations = 9999, method = "bray")
+    
+permanova_df <- as.data.frame(permanova_result)
+
+    # Add group names to the results
+    permanova_df$group1 <- group1
+    permanova_df$group2 <- group2
+    
+    # Append the permanova_df to the main results table
+    permanova_tbl <- rbind(permanova_tbl, permanova_df)
+  }
+}
+permanova_tbl$padj <- p.adjust(permanova_tbl$`Pr(>F)`, method="BH")
+
+group_list <- c(1:6)
+place_list <- c("A", "B", "C", "E", "F", "G")
+samplegroup_tbl <- as.data.frame(t(rbind(group_list, place_list)))
+
+permanova_tbl$type <- row.names(permanova_tbl)
+permanova_tbl <- merge(permanova_tbl, samplegroup_tbl, by.x = "group1", by.y= "group_list")
+permanova_tbl <- merge(permanova_tbl, samplegroup_tbl, by.x = "group2", by.y= "group_list")
+
+permanova_tbl <- permanova_tbl %>%
+  mutate(place1 = permanova_tbl$place_list.x, place2 = permanova_tbl$place_list.y)%>%
+  subset(select= -c(place_list.x,place_list.y, group1, group2))
+
+pairwise_season_permanova_tbl <- na.omit(permanova_tbl)
+pairwise_season_permanova_tbl$type <- gsub("[0-9]+", "", pairwise_season_permanova_tbl$type) 
+pairwise_season_permanova_tbl[,2:6] <- round(pairwise_season_permanova_tbl[,2:6], 4)
+
+pairwise_season_permanova_tbl <- pairwise_season_permanova_tbl[order(pairwise_season_permanova_tbl$type),]
+pairwise_season_permanova_tbl <- pairwise_season_permanova_tbl[order(pairwise_season_permanova_tbl$place2),]
+pairwise_season_permanova_tbl <- pairwise_season_permanova_tbl[order(pairwise_season_permanova_tbl$place1),]
+
+
+permanova_tbl1_0.5 <- pairwise_season_permanova_tbl[pairwise_season_permanova_tbl$`padj`<0.05,]
+table(permanova_tbl1_0.5$place1)
+
+#write xlxs file
+write.xlsx(pairwise_season_permanova_tbl, file = "pairwise_season_permanova_tbl.xlsx")
+```
+
+## Bray-curtis
+
+```{r}
+# Initialize an empty data frame to store results
+bray_curtis_season_table <- data.frame(Group1 = character(), Group2 = character(),
+                                MeanBrayCurtis = numeric(), stringsAsFactors = FALSE)
+metaData_fall_summer$place_season <- paste(metaData_fall_summer$place, metaData_fall_summer$Season, sep = "_")
+    
+    bc_dist <- vegdist(tab_rar_fall_summer, method = "bray")# Compute Bray-Curtis dissimilarity
+    
+    # Get unique group identifiers
+unique_groups <- unique(metaData_fall_summer$place_season)
+# Loop over each pair of groups
+for (i in 1:(length(unique_groups))) {
+  for (j in (i):length(unique_groups)) {
+    
+    group1 <- unique_groups[i]
+    group1 <- rownames(filter(metaData_fall_summer, place_season == group1)) 
+    group2 <- unique_groups[j]
+    group2 <- rownames(filter(metaData_fall_summer, place_season == group2))
+    
+  
+    # Convert to matrix and extract distances between groups
+    bc_matrix <- as.matrix(bc_dist)
+    group1_indices <- rownames(bc_matrix) %in% group1
+    group2_indices <- colnames(bc_matrix) %in% group2
+    between_group_distances <- bc_matrix[group1_indices, group2_indices]
+    
+    between_group_distances[between_group_distances == 0] <- NA
+    mean_bc <- mean(between_group_distances, na.rm = TRUE)
+    
+    # Store result
+    bray_curtis_season_table <- rbind(bray_curtis_season_table,
+                               data.frame(Group1 = unique(metaData_fall_summer$place_season)[i], Group2 = unique(metaData_fall_summer$place_season)[j], MeanBrayCurtis = mean_bc))
+  }
+}
+```
+
+# Time general
+
+```{r}
+# Initialize an empty data frame to store results
+bray_curtis_time_table <- data.frame(Location = character(), time1 = character(), time2 = character(),
+                                MeanBrayCurtis = numeric(), stringsAsFactors = FALSE)
+# Compute Bray-Curtis dissimilarity
+    bc_dist <- vegdist(tab_rar_mF, method = "bray")
+    
+    # Get unique group identifiers
+unique_groups <- unique(metaData_mF$place)
+time <- unique(metaData_mF$timestamp)
+# Loop over each pair of groups
+for (k in 1:(length(unique_groups))) {
+for (i in 1:(length(time))) {
+  for (j in (i):length(time)) {
+    
+    Location <- unique_groups[k]
+    group1 <- time[i]
+    group1 <- rownames(filter(metaData_mF, timestamp == group1 & place == unique_groups[k]))
+    group2 <- time[j]
+    group2 <- rownames(filter(metaData_mF, timestamp == group2 & place == unique_groups[k]))
+    
+    # Convert to matrix and extract distances between groups
+    bc_matrix <- as.matrix(bc_dist)
+    group1_indices <- rownames(bc_matrix) %in% group1
+    group2_indices <- colnames(bc_matrix) %in% group2
+    between_group_distances <- bc_matrix[group1_indices, group2_indices]
+ 
+    between_group_distances[between_group_distances == 0] <- NA # Assumes that only self compairisons are exactly 0
+    mean_bc <- mean(between_group_distances, na.rm = TRUE)
+    
+    # Store result
+    bray_curtis_time_table <- rbind(bray_curtis_time_table,
+                               data.frame(Location = unique_groups[k],time1 = time[i], time2 = time[j], MeanBrayCurtis = mean_bc))
+  }
+}
+}
+
+# Separate data by sampling dag and season
+summer <- bray_curtis_time_table[bray_curtis_time_table$time1 == "P" | bray_curtis_time_table$time2 == "P", ]
+summer_spatial <- summer[summer$time1 == summer$time2, ]
+Season <- summer[!(summer$time1 == summer$time2), ]
+fall <- bray_curtis_time_table[!(bray_curtis_time_table$time1 == "P" | bray_curtis_time_table$time2 == "P"), ]
+fall_spatial <- fall[fall$time1 == fall$time2, ]
+sampling_day <- fall[!(fall$time1 == fall$time2), ]
+
+fall_spatial$Group <- "spatial"
+summer_spatial$Group <- "spatial"
+Season$Group <- "Season"
+sampling_day$Group <- "sampling_day"
+
+# Combine the data frames
+bray_curtis_time <- rbind(fall_spatial, summer_spatial, Season, sampling_day)
+ggplot(bray_curtis_time, aes(x = Group, y = MeanBrayCurtis)) +
+  geom_boxplot() +
+  labs(title = "Box Plot of Mean Bray-Curtis distances between samples within the same location",
+       x = "",
+       y = "Mean Bray-Curtis distance") +
+  theme_minimal()
+
+# Differences in Bray-Curtis distances between samples collected within 2 weeks and across seasons
+wilcox.test(sampling_day$MeanBrayCurtis, Season$MeanBrayCurtis, alternative = "two.sided")
+
+# Differences in Bray-Curtis distances between samples collected at the same time and across seasons
+spatial <- rbind(fall_spatial, summer_spatial)
+wilcox.test(Season$MeanBrayCurtis, spatial$MeanBrayCurtis, alternative = "two.sided")
+```
+
+
+# Fabric
+
+## Wilcoxon rank-sum test to se differenses in number of ASVs and readcounts between fabric and soil 
+```{r}
+
+fabric_data <- tab[seq_len(nrow(tab)) %in% (grep("0F$", row.names(tab), value = FALSE)) | (substr(row.names(tab), 2, 2) == "4"), ]
+soil_data <- tab[!row.names(tab) %in% row.names(fabric_data), ]
+
+fabric_info <- as.data.frame(row.names(fabric_data))
+fabric_info$total_reads <- rowSums(fabric_data)
+fabric_info$nrASVs <- rowSums(fabric_data > 0)
+
+soil_info <- as.data.frame(row.names(soil_data))
+soil_info$total_reads <- rowSums(soil_data)
+soil_info$nrASVs <- rowSums(soil_data > 0)
+
+mean(soil_info$total_reads)
+mean(fabric_info$total_reads)
+mean(soil_info$nrASVs)
+mean(fabric_info$nrASVs)
+
+# Perform Wilcoxon rank-sum test
+## Differences in nr of ASVs between soil and fabric samples
+nrASVs_result <- wilcox.test(fabric_info$nrASVs, soil_info$nrASVs, alternative = "greater")
+print(nrASVs_result)
+
+## Difference in nr of reads between soil and fabric samples
+read_counts_results <- wilcox.test(fabric_info$total_reads, soil_info$total_reads, alternative = "greater")
+print(read_counts_results)
+```
+## Taxa only found in fabric
+```{r}
+unique_fabric_fall_Class <- unique(tax_fall_fabric$Class[!tax_fall_fabric$Class %in% c(tax_fall_mF$Class, tax_summer_mF$Class)])
+print(unique_fabric_fall_Class)
+unique_fabric_summer_class <- unique(tax_summer_fabric$Class[!tax_summer_fabric$Class %in% c(tax_summer_mF$Class, tax_fall_mF$Class)])
+print(unique_fabric_summer_class)
+unique_fabric_Class <- unique(c(unique_fabric_fall_Class,unique_fabric_summer_class))
+print(unique_fabric_Class)
+
+tax_Symbio <- subset(tax_summer, Class == "Symbiobacteriia")
+symbio_counts <- tab_rar_summer[, colnames(tab_rar_summer) %in% rownames(tax_Symbio)]
+print(symbio_counts)
+```
+
+```{r}
+sessionInfo()
+```
+
