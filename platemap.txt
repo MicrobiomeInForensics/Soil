@@ -1,0 +1,9 @@
+	1	2	3	4	5	6	7	8	9	10	11	12
+A	f1_r3	f2_r3	f4_r3	f5_r3	f7_r3	f8_r3	f10_r3	f11_r3	f13_r3	f16_r3	f19_r3	f22_r3
+B	f1_r4	f2_r4	f6_r4	f5_r4	f7_r4	f8_r4	f10_r4	f11_r4	f13_r4	f16_r4	f19_r4	f22_r4
+C	f1_r7	f2_r7	f4_r7	f5_r7	f6_r7	f8_r7	f10_r7	f11_r7	f13_r7	f16_r7	f19_r7	f22_r7
+D	f1_r12	f2_r12	f4_r12	f5_r12	f7_r12	f8_r12	f10_r12	f11_r12	f13_r12	f16_r12	f19_r12	f22_r12
+E	f1_r15	f2_r15	f4_r15	f5_r15	f7_r15	f8_r15	f10_r15	f11_r15	f13_r15	f16_r15	f19_r15	f22_r15
+F	f1_r16	f2_r16	f4_r16	f5_r16	f7_r16	f8_r16	f10_r16	f11_r16	f13_r16	f6_r16	f19_r16	f22_r16
+G	f1_r19	f2_r19	f4_r19	f5_r19	f7_r19	f8_r19	f10_r19	f11_r19	f13_r19	f16_r19	f6_r19	f22_r19
+H	f1_r22	f2_r22	f4_r22	f5_r22	f7_r22	f8_r22	f10_r22	f11_r22	f13_r22	f16_r22	f19_r22	f6_r22

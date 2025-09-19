@@ -1,0 +1,4739 @@
+---
+title: "Script_2.2_Prediction"
+author: ""
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r libraries}
+library(rstudioapi) #set WD
+library(tidyverse) #%>% function
+library(ggplot2)
+library(caret) # machine learning
+library(randomForest) # machine learning
+library(reshape2) # For making long datasets (melt)
+library(ranger)
+library(patchwork)
+```
+
+```{r setting_WD_to_source_file_location}
+setwd(dirname(getActiveDocumentContext()$path)) #setting Working directory
+print(getwd()) # Checking working directory
+```
+
+```{r settings}
+Variables_selected = 250
+prediction_info_file_out = "results/total_ASV_prediction_info.txt"
+total_prediction_VS_info_file_out = "results/total_ASV_VS_prediction_info.txt"
+```
+
+```{r load_data}
+tab <- read.csv2("tab.txt", sep = "\t")
+tax_tbl <- read.csv2("taxonomy_filtered.txt", sep = "\t")
+metaData <- read.csv2("metaData.txt", sep = "\t")
+```
+
+```{r schaling}
+read_counts<-rowSums(tab)
+smallest<-min(read_counts)
+normal<-smallest/read_counts
+tab_rar<-tab*normal
+```
+
+```{r making_different_subsets}
+# making the subsets based on metaData categories
+metaData_fall <- metaData[!(metaData$timestamp == "P"), ]
+metaData_summer <- metaData[(metaData$timestamp == "P"), ]
+metaData_fall_mF <- metaData_fall[metaData_fall$sample_type == "soil", ]
+metaData_fall_Time2 <- metaData_fall_mF[metaData_fall_mF$timestamp == "14", ]
+metaData_fall_Time1 <- metaData_fall_mF[metaData_fall_mF$timestamp == "7", ]
+metaData_fall_Time0 <- metaData_fall_mF[metaData_fall_mF$timestamp == "0", ]
+metaData_fall_Time01 <- metaData_fall_mF[metaData_fall_mF$timestamp %in% c("7", "0"), ]
+metaData_fall_Time12 <- metaData_fall_mF[metaData_fall_mF$timestamp %in% c("7", "14"), ]
+metaData_summer_mF <- metaData_summer[metaData_summer$sample_type == "soil", ]
+metaData_fall_fabric <- metaData_fall[metaData_fall$sample_type == "fabric", ]
+metaData_summer_fabric <- metaData_summer[metaData_summer$sample_type == "fabric", ]
+metaData_fall_summer <- metaData[metaData$place %in% metaData_summer$place , ]
+metaData_fall_and_summer <- filter(metaData_fall_summer, place %in% c("A", "B", "C", "F"))
+metaData_fall_ABCF <- filter(metaData_fall_mF, place %in% c("A", "B", "C", "F"))
+metaData_summer_ABCF <- filter(metaData_summer_mF, place %in% c("A", "B", "C", "F"))
+
+# making subsets of ASV tables based on metaData
+tab_rar_fall <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall), , drop = FALSE])
+tab_rar_fall_mF <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_mF), , drop = FALSE])
+tab_rar_summer <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_summer), , drop = FALSE])
+tab_rar_summer_mF <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_summer_mF), , drop = FALSE])
+tab_rar_fall_fabric <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_fabric), , drop = FALSE])
+tab_rar_summer_fabric <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_summer_fabric), , drop = FALSE])
+tab_rar_fall_summer <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_summer), , drop = FALSE])
+tab_rar_fall_Time2 <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_Time2), , drop = FALSE])
+tab_rar_fall_Time1 <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_Time1), , drop = FALSE])
+tab_rar_fall_Time0 <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_Time0), , drop = FALSE])
+tab_rar_fall_Time01 <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_Time01), , drop = FALSE])
+tab_rar_fall_Time12 <- (tab_rar[row.names(tab_rar) %in% row.names(metaData_fall_Time12), , drop = FALSE])
+tab_rar_fall_ABCF <- (tab_rar_fall_mF[row.names(tab_rar_fall_mF) %in% row.names(metaData_fall_ABCF), , drop = FALSE])
+tab_rar_summer_ABCF <- (tab_rar_summer_mF[row.names(tab_rar_summer_mF) %in% row.names(metaData_summer_ABCF), , drop = FALSE])
+
+# removing ASVs not present in any of the samples in each table
+keep<-colSums(tab_rar_fall)>0 
+tab_rar_fall <-tab_rar_fall[,keep]
+tax_fal <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_mF)>0 
+tab_rar_fall_mF <-tab_rar_fall_mF[,keep]
+tax_fall_mF <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_summer)>0 
+tab_rar_summer <-tab_rar_summer[,keep]
+tax_summer <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_summer_mF)>0 
+table(keep)
+tab_rar_summer_mF <-tab_rar_summer_mF[,keep]
+tax_summer_mF <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_summer_fabric)>0 
+tab_rar_summer_fabric <-tab_rar_summer_fabric[,keep]
+tax_summer_fabric <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_fabric)>0 
+tab_rar_fall_fabric <-tab_rar_fall_fabric[,keep]
+tax_fall_fabric <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_summer)>0 
+tab_rar_fall_summer <-tab_rar_fall_summer[,keep]
+tax_fall_summer <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_Time2)>0 
+tab_rar_fall_Time2 <-tab_rar_fall_Time2[,keep]
+tax_fall_Time2 <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_Time1)>0 
+tab_rar_fall_Time1 <-tab_rar_fall_Time1[,keep]
+tax_fall_Time1 <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_Time0)>0 
+tab_rar_fall_Time0 <-tab_rar_fall_Time0[,keep]
+tax_fall_Time0 <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_Time01)>0 
+tab_rar_fall_Time01 <-tab_rar_fall_Time01[,keep]
+tax_fall_Time01 <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_Time12)>0 
+tab_rar_fall_Time12 <-tab_rar_fall_Time12[,keep]
+tax_fall_Time12 <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_fall_ABCF)>0 
+tab_rar_fall_ABCF <-tab_rar_fall_ABCF[,keep]
+tax_rar_fall_ABCF <-tax_tbl[keep,]
+
+keep<-colSums(tab_rar_summer_ABCF)>0 
+tab_rar_summer_ABCF <-tab_rar_summer_ABCF[,keep]
+tax_rar_summer_ABCF <-tax_tbl[keep,]
+keep <- NULL
+```
+
+
+#  Random forest using "Random Forest" package
+```{r collect_pred_info}
+prediction_info <- data.frame()
+```
+
+## Finding optimal mtry and ntree values
+```{r optimizing, eval=FALSE}
+X <- tab_rar
+x_train <- tab_rar # Training features
+y_train <- metaData$place # Training labels
+
+# Define the search grid for hyperparameters including mtry, splitrule, and min.node.size
+tune_grid <- expand.grid(
+  mtry = c(floor(ncol(X)/6), floor(ncol(X)/5), floor(ncol(X)/4), floor(ncol(X)/3), floor(ncol(X)/2), floor(ncol(X)/1.5)),
+  splitrule = "gini",  # Use the gini split rule which is commonly used for classification
+  min.node.size = 1  # Setting a fixed min.node.size value
+)
+# Define control parameters for cross-validation
+train_control <- trainControl(
+  method = "cv",  # Use cross-validation
+  number = 5,  # 5-fold cross-validation
+  verboseIter = TRUE  # Print progress
+)
+# Train the Random Forest models for each combination of num.trees and mtry
+results <- lapply(c(50, 100, 150, 200, 400, 600), function(num_trees) {
+  set.seed(123)
+  rf_cv_model <- train(
+    x = x_train,
+    y = y_train,
+    method = "ranger",  # Use ranger for efficiency
+    tuneGrid = tune_grid,  # The hyperparameter grid with mtry, splitrule, and min.node.size
+    trControl = train_control,  # Cross-validation settings
+    metric = "Accuracy",  # Metric to optimize
+    num.trees = num_trees  # Specify number of trees 
+  )
+  # Store results along with the number of trees
+  list(num.trees = num_trees, model = rf_cv_model, accuracy = max(rf_cv_model$results$Accuracy))
+})
+
+# Extract results into a dataframe
+results_df <- do.call(rbind, lapply(results, function(res) {
+  data.frame(num.trees = res$num.trees, mtry = res$model$bestTune$mtry, splitrule = res$model$bestTune$splitrule, min.node.size = res$model$bestTune$min.node.size, Accuracy = res$accuracy)
+}))
+
+# Find the optimal combination
+best_result <- results_df[which.max(results_df$Accuracy), ]
+print(best_result)
+```
+
+
+
+# Summer
+
+## all summer samples
+```{r prediction_of_summer_samples}
+# Define feature matrix (X) and target vector (y)
+X <- tab_rar_summer
+y <- as.factor(metaData_summer$place)
+
+# Create folds
+folds_combined <- list()
+for (i in 1:20) {
+  set.seed(i)  # Set seed to the current value of i
+  folds_combined <- c(folds_combined, createFolds(y, k = 4, list = TRUE, returnTrain = TRUE))
+}
+
+
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame() 
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (i in 1:20){
+  set.seed(2)
+  train_index <- unlist(folds_combined[[i]])
+  x_train <- X[train_index, ]
+  x_test <- X[-train_index, ]
+  y_train <- y[train_index]
+  y_test <- y[-train_index]
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[i]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "E", "F", "G")
+colnames(a) <- c("A", "B", "C", "E", "F", "G")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")      
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# there are no incorrect predicted samples
+
+```
+
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+summer_prediction_info <- data.frame(
+  Test = "summer all samples",
+  Train = "summer all samples",
+  Approach = "cross-validation",
+  Accuracy = round(d, 3), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , summer_prediction_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+# Calculate the row-wise sums
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") +
+  ggtitle("B")
+
+png("results/conf_matrix_ASV_summer_all.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+```{r probability_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 30),  # Global text size
+    axis.title = element_text(size = 30),  # Axis titles
+    axis.text = element_text(size = 30),  # Axis text
+    legend.title = element_text(size = 30),  # Legend title
+    legend.text = element_text(size = 30)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_predicting_summer_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+```{r Prob_distribution}
+prob_long$Model <- rep("Summer", length(prob_long$Sample)) 
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+
+# Add an identifier column to each data frame
+prob_long_cor$Prediction <- "Correct"
+prob_long_wrong$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor, prob_long_wrong)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_histogram(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_summer.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+
+```{r importance}
+Importance_ASV_summer_all.tbl <- importance
+```
+
+## # Predicting with class taxonomy summer
+
+```{r prediction_of_summer_samples}
+
+tab_rar_summer_t <- as.data.frame(t(tab_rar_summer)) # Making samples the columns (so that tab rows and tax rows correspond)
+abundance_summer_tab <- cbind(tax_summer, tab_rar_summer_t)
+
+filtered_abundance_tab <- dplyr::select(abundance_summer_tab, !c(Family, Order, Kingdom, Phylum, Genus, Species))
+
+  # Summarize numeric columns by the "Class" column
+  summarized_data <- filtered_abundance_tab %>%
+    group_by(Class) %>%
+    summarize(across(where(is.numeric), sum, na.rm = TRUE))
+
+summarized_data <- as.data.frame(filter(summarized_data, Class != "NA"))
+row.names(summarized_data) <- summarized_data$Class
+summarized_data <- dplyr::select(summarized_data, !Class)
+summarized_data_t <- as.data.frame(t(summarized_data))
+
+# Define feature matrix (X) and target vector (y)
+X <- summarized_data_t
+y <- as.factor(metaData_summer$place)
+
+
+
+folds_combined <- list()
+for (i in 1:20) {
+  set.seed(i)  # Set seed to the current value of i
+  folds_combined <- c(folds_combined, createFolds(y, k = 4, list = TRUE, returnTrain = TRUE))
+}
+
+
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame() 
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (i in 1:20){
+  set.seed(2)
+  train_index <- unlist(folds_combined[[i]])
+  x_train <- X[train_index, ]
+  x_test <- X[-train_index, ]
+  y_train <- y[train_index]
+  y_test <- y[-train_index]
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[i]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "E", "F", "G")
+colnames(a) <- c("A", "B", "C", "E", "F", "G")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")      
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%  # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <-  paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+
+summer_prediction_with_taxa_info <- data.frame(
+  Test = "summer samples",
+  Train = "summer samples",
+  Approach = "cross-validation, class taxa as features",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , summer_prediction_with_taxa_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") +
+  ggtitle("B")
+
+png("results/conf_matrix_ASV_summer_taxa.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+
+```{r importance}
+Importance_ASV_summer_With_taxa.tbl <- importance
+
+```
+
+# Fall
+
+## soil from fall
+
+
+```{r prediction_of_fall_soil_samples}
+
+# Define feature matrix (X) and target vector (y)
+X <- tab_rar_fall_mF
+y <- as.factor(metaData_fall_mF$place)
+
+
+folds_combined <- list()
+for (i in 1:20) {
+  set.seed(i)  # Set seed to the current value of i
+  folds_combined <- c(folds_combined, createFolds(y, k = 5, list = TRUE, returnTrain = TRUE))
+}
+
+# Containers needed for collecting prediction info
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame() 
+importance <- data.frame()  
+noise <- data.frame()  
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (i in 1:25){ # Each sample is predicted 5 times
+  set.seed(2)
+  train_index <- unlist(folds_combined[[i]]) 
+  x_train <- X[train_index, ]
+  x_test <- X[-train_index, ]
+  y_train <- y[train_index]
+  y_test <- y[-train_index]
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[i]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx],
+      Fold = i
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")  
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# inspecting incorrectly predicted samples
+incorrect_pred <- incorrect_predictions
+incorrect_predictions <- incorrect_pred %>%
+  group_by(sample_id) %>%  
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_soil_prediction_info <- data.frame(
+  Test = "fall soil",
+  Train = "fall soil",
+  Approach = "cross-validation",
+  Accuracy = round(d, 3), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+
+prediction_info <- rbind(prediction_info , fall_soil_prediction_info)
+```
+
+```{r formating_confusion_matrix}
+df <- as.data.frame(as.table(a))
+# Calculate the row-wise sums
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_soil_fall <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_soil_fall.png", width = 1800, height = 1000)
+print(conf_matrix_soil_fall)
+dev.off()
+```
+
+```{r Prob_distribution}
+prob_long$Model <- rep("Soil_fall", length(prob_long$Sample))
+prob_long_cor1 <- prob_long[prob_long$place == prob_long$predicted_place, ]
+
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong1 <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+
+# Add an identifier column to each data frame
+prob_long_cor1$Prediction <- "Correct"
+prob_long_wrong1$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor1, prob_long_wrong1)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_histogram(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_ASV_fall_soil.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_soil_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+```{r importance_ASVs}
+importance_ASV_fall_soil_samples.tbl <- importance
+```
+
+
+## Soil fall with class taxonomy
+
+```{r prediction_of_fall_soil_samples}
+tab_rar_fall_t <- as.data.frame(t(tab_rar_fall_mF)) # Making samples the columns (so that tab rows and tax rows correspond)
+abundance_fall_tab <- cbind(tax_fall_mF, tab_rar_fall_t)
+
+filtered_abundance_tab <- dplyr::select(abundance_fall_tab, !c(Family, Order, Kingdom, Phylum, Genus, Species))
+
+  # Summarize numeric columns by the "Class" column
+  summarized_data <- filtered_abundance_tab %>%
+    group_by(Class) %>%
+    summarize(across(where(is.numeric), sum, na.rm = TRUE))
+
+summarized_data <- as.data.frame(filter(summarized_data, Class != "NA"))
+row.names(summarized_data) <- summarized_data$Class
+summarized_data <- dplyr::select(summarized_data, !Class)
+summarized_data_t <- as.data.frame(t(summarized_data))
+
+# Define feature matrix (X) and target vector (y)
+X <- summarized_data_t
+y <- as.factor(metaData_fall_mF$place)
+
+folds_combined <- list()
+for (i in 1:20) {
+  set.seed(i)  # Set seed to the current value of i
+  folds_combined <- c(folds_combined, createFolds(y, k = 5, list = TRUE, returnTrain = TRUE))
+}
+
+
+
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame() 
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (i in 1:25){
+  set.seed(2)
+  train_index <- unlist(folds_combined[[i]]) 
+  x_train <- X[train_index, ]
+  x_test <- X[-train_index, ]
+  y_train <- y[train_index]
+  y_test <- y[-train_index]
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[i]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")     
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%  # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+Class_prediction_info <- data.frame(
+  Test = "soil fall",
+  Train = "soil fall",
+  Approach = "cross-validation, class taxa as features",
+   Accuracy = round(d, 4),  
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info, Class_prediction_info)
+```
+
+```{r conf_matrix}
+df <- as.data.frame(as.table(a))
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_with_taxonomy_at_class_level.png", width = 1800, height = 1000)
+print(conf_matrix)
+dev.off()
+```
+
+
+```{r importance}
+Importance_ASV_fall_class_prediction.tbl <- importance
+```
+
+
+## prediction of soil from fall with variables selected as important during fall soil prediction -finding highest accuracy
+```{r}
+# sorting important ASVs based on frequency (for how many models they are amongst the 250 most important)
+asv_freq <- as.data.frame(table(importance_ASV_fall_soil_samples.tbl$ASV))
+sorted_asv_freq <- asv_freq[order(-asv_freq$Freq), ]
+
+# Initialize a dataframe to store results
+VS_info <- data.frame()
+
+for (n_top_asvs in seq(10, 500, by = 10)) {
+  
+  # Select top n ASVs
+  top_ASVs <- head(sorted_asv_freq, n_top_asvs)
+  selected_ASVs <- as.character(top_ASVs$Var1)
+  
+  # Subset the feature table
+  tab_rar_fall_mF_subset <- tab_rar_fall_mF[, colnames(tab_rar_fall_mF) %in% selected_ASVs]
+  
+  # Define X and y
+  X <- tab_rar_fall_mF_subset
+  y <- as.factor(metaData_fall_mF$place)
+  
+  # Create folds
+  folds_combined <- list()
+  for (i in 1:20) {
+    set.seed(i)
+    folds_combined <- c(folds_combined, createFolds(y, k = 5, list = TRUE, returnTrain = TRUE))
+  }
+
+  # Initialize containers
+  y_predTotal <- data.frame()
+  importance <- data.frame()
+  noise <- data.frame()
+  
+    Variables_selected <- n_top_asvs
+  
+  for (i in 1:25) {
+    set.seed(2)
+    train_index <- unlist(folds_combined[[i]])
+    x_train <- X[train_index, ]
+    x_test <- X[-train_index, ]
+    y_train <- y[train_index]
+    y_test <- y[-train_index]
+    
+    rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,
+                             mtry = floor(ncol(x_train)/6),
+                             num.threads = parallel::detectCores() - 1,
+                             importance = TRUE)
+    
+    y_pred <- predict(rf_model, x_test)
+    y_predRes <- data.frame(y_pred = y_pred, y_test = y_test)
+    y_predTotal <- rbind(y_predTotal, y_predRes)
+    
+   
+    importance_matrix <- as.data.frame(rf_model$importance)
+    importance_matrix$ASV <- rownames(importance_matrix)
+    top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]
+    top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]
+    importance <- rbind(importance, top_importance)
+    
+    noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+    noise <- rbind(noise, noise_vars)
+    
+    }
+  
+  b <- nrow(y_predTotal)
+  c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+  d <- c / b
+  
+   fall_soil_nrASVs_VS_info <- data.frame(
+    Model = paste0("Top_", n_top_asvs, "_ASVs"),
+    Accuracy = d,
+    Features = ncol(X))
+  
+  VS_info <- rbind(VS_info, fall_soil_nrASVs_VS_info)
+}
+
+```
+
+
+```{r}
+png("results/nr_important_fall_soil_ASVs_for_soil_fall_pred", width = 1800, height = 1000)
+# Create the scatter plot
+ggplot(VS_info, aes(x = Features, y = Accuracy)) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_line(color = "steelblue", linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    title = "Model Accuracy vs Number of Features",
+    x = "Number of Features (ASVs)",
+    y = "Prediction Accuracy"
+  )
+dev.off()
+
+```
+
+
+## prediction of soil from fall with nr of important variables giving highest accuracy 
+```{r}
+top_ASVs <- head(sorted_asv_freq,  VS_info$Features[which.max(VS_info$Accuracy)])
+selected_ASVs <- as.character(top_ASVs$Var1)
+selected_ASVs_fall_soil <- selected_ASVs
+```
+
+```{r prediction_of_fall_soil_samples}
+# Subset the feature table
+  tab_rar_fall_mF_subset <- tab_rar_fall_mF[, colnames(tab_rar_fall_mF) %in% selected_ASVs]
+  
+  # Define X and y
+  X <- tab_rar_fall_mF_subset
+  y <- as.factor(metaData_fall_mF$place)
+  
+  folds_combined <- list()
+for (i in 1:20) {
+  set.seed(i)  # Set seed to the current value of i
+  folds_combined <- c(folds_combined, createFolds(y, k = 5, list = TRUE, returnTrain = TRUE))
+}
+
+
+# Containers needed for collecting prediction info
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame() 
+importance <- data.frame()  
+noise <- data.frame()  
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (i in 1:25){ # Each sample is predicted 5 times
+  set.seed(2)
+  train_index <- unlist(folds_combined[[i]]) 
+  x_train <- X[train_index, ]
+  x_test <- X[-train_index, ]
+  y_train <- y[train_index]
+  y_test <- y[-train_index]
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[i]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")  
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%  # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_soil_prediction_VS_info <- data.frame(
+  Test = "fall soil",
+  Train = "fall soil",
+  Approach = "cross-validation, Feature selection",
+  Accuracy = round(d, 4),  
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+
+prediction_info <- rbind(prediction_info, fall_soil_prediction_VS_info)
+```
+
+```{r formating_confusion_matrix}
+df <- as.data.frame(as.table(a))
+
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_soil_fall <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_soil_fall_VS.png", width = 1800, height = 1000)
+print(conf_matrix_soil_fall)
+dev.off()
+```
+
+```{r Prob_distribution}
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+# Add an identifier column to each data frame
+prob_long_cor$Prediction <- "Correct"
+prob_long_wrong$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor, prob_long_wrong)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_density(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_ASV_fall_soil_VS.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_soil_plot_VS.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+# Sampling day
+
+## Predicting week 2 when training with the other timepoints
+
+```{r}
+Place_Time2 <- unique(metaData_fall_Time2$place)
+metaData_fall_Time01_subset <- dplyr::filter(metaData_fall_Time01, place %in% Place_Time2)
+tab_rar_fall_Time01_subset <- (tab_rar_fall_Time01[row.names(tab_rar_fall_Time01) %in% row.names(metaData_fall_Time01_subset), , drop = FALSE])
+
+keep<-colSums(tab_rar_fall_Time01_subset)>0 
+tab_rar_fall_Time01_subset <-tab_rar_fall_Time01_subset[,keep]
+common_columns <- intersect(colnames(tab_rar_fall_Time01_subset), colnames(tab_rar_fall_Time2))
+
+# Subset both tables to only the common columns
+tab_rar_fall_Time01_subset <- tab_rar_fall_Time01_subset[, common_columns]
+tab_rar_fall_Time2_subset <- tab_rar_fall_Time2[, common_columns]
+
+# Train and test data
+x_train <- tab_rar_fall_Time01_subset  # feature matrix for training
+y_train <- as.factor(metaData_fall_Time01_subset$place)  # target for training
+x_test <- tab_rar_fall_Time2_subset  # feature matrix for testing
+y_test <- as.factor(metaData_fall_Time2$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+      # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c(unique(metaData_fall_Time01_subset$place))
+colnames(a) <- c(unique(metaData_fall_Time01_subset$place))
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")     
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%  # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_Time2_prediction_info <- data.frame(
+  Test = "fall day 14 soil",
+  Train = "fall day 0 and 7 soil",
+  Approach = " ",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , fall_Time2_prediction_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_Time0$place)
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_on_timepoint14.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+
+```{r Prob_distribution}
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+# Add an identifier column to each data frame
+prob_long_cor$Prediction <- "Correct"
+prob_long_wrong$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor, prob_long_wrong)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_histogram(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_week2.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_Time14_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+
+```{r unique_importance}
+Importance_ASV_fall_Time2.tbl <- importance
+```
+
+## Predicting week 2 when training with the other timepoints precense absence data
+```{r}
+
+tab_rar_fall_Time01_subset[tab_rar_fall_Time01_subset > 0] <- 1
+tab_rar_fall_Time2_subset[tab_rar_fall_Time2_subset > 0] <- 1
+
+# Train and test data
+x_train <- tab_rar_fall_Time01_subset  # feature matrix for training
+y_train <- as.factor(metaData_fall_Time01_subset$place)  # target for training
+x_test <- tab_rar_fall_Time2_subset  # feature matrix for testing
+y_test <- as.factor(metaData_fall_Time2$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+  # Train the Random Forest model
+    # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c(unique(metaData_fall_Time01_subset$place))
+colnames(a) <- c(unique(metaData_fall_Time01_subset$place))
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")     
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%  # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+
+fall_Time2_prediction_pa_info <- data.frame(
+  Test = "fall day 14 soil",
+  Train = "fall day 0 and 7 soil",
+  Approach = "presence/absense",
+  Accuracy = round(d, 4),  
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , fall_Time2_prediction_pa_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_Time0$place)
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_on_timepoint14_presence_absence.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+
+```{r Prob_distribution}
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+# Add an identifier column to each data frame
+prob_long_cor$Prediction <- "Correct"
+prob_long_wrong$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor, prob_long_wrong)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_histogram(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_week2_precence_absense.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_week2_precence_absense_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+
+```{r unique_importance}
+Importance_ASV_fall_Time2_precence_absense.tbl <- importance
+```
+
+
+## Predicting week 0 when training with the other timepoints
+
+```{r}
+common_columns <- intersect(colnames(tab_rar_fall_Time12), colnames(tab_rar_fall_Time0))
+
+# Subset both tables to only the common columns
+tab_rar_fall_Time12_subset <- tab_rar_fall_Time12[, common_columns]
+tab_rar_fall_Time0_subset <- tab_rar_fall_Time0[, common_columns]
+
+# Train and test data
+x_train <- tab_rar_fall_Time12_subset  # feature matrix for training
+y_train <- as.factor(metaData_fall_Time12$place)  # target for training
+x_test <- tab_rar_fall_Time0_subset  # feature matrix for testing
+y_test <- as.factor(metaData_fall_Time0$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+  # Train the Random Forest model
+    # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "N", "P", "Q", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")      
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%  # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_Time0_prediction_info <- data.frame(
+  Test = "fall day 0 soil",
+  Train = "fall day 7 and 14 soil",
+  Approach = " ",
+  Accuracy = round(d, 4),  
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , fall_Time0_prediction_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_Time0$place)
+
+# Create a data frame with Var1, Var2 filled with "Q", and Freq filled with 0
+df2 <- data.frame(
+  Var1 = Var1,             # First column
+  Var2 = rep("L", length(Var1)),  # Second column with "Q"
+  Freq = rep(0, length(Var1))     # Third column with 0s
+)
+df <- rbind(df, df2)
+df$Var2 <- as.character(df$Var2)
+idx <- order(df$Var2)
+df <- df[idx,]
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_on_timepoint0.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_time0.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+
+```{r Prob_distribution}
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+
+# Add an identifier column to each data frame
+prob_long_cor$Prediction <- "Correct"
+prob_long_wrong$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor, prob_long_wrong)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_histogram(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_week0.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+
+```{r unique_importance}
+Importance_ASV_fall_Time0.tbl <- importance
+
+```
+
+
+## Predicting week 0 when training with the other timepoints presence absence
+
+```{r}
+tab_rar_fall_Time12_subset[tab_rar_fall_Time12_subset > 0] <- 1
+tab_rar_fall_Time0_subset[tab_rar_fall_Time0_subset > 0] <- 1
+
+# Train and test data
+x_train <- tab_rar_fall_Time12_subset  # feature matrix for training
+y_train <- as.factor(metaData_fall_Time12$place)  # target for training
+x_test <- tab_rar_fall_Time0_subset  # feature matrix for testing
+y_test <- as.factor(metaData_fall_Time0$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+  # Train the Random Forest model
+    # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "N", "P", "Q", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")      
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_Time0_prediction_info <- data.frame(
+  Test = "fall day 0 soil",
+  Train = "fall day 7 and 14 soil",
+  Approach = "precence/absence",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , fall_Time0_prediction_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_Time0$place)
+
+# Create a data frame with Var1, Var2 filled with "Q", and Freq filled with 0
+df2 <- data.frame(
+  Var1 = Var1,             # First column
+  Var2 = rep("L", length(Var1)),  # Second column with "Q"
+  Freq = rep(0, length(Var1))     # Third column with 0s
+)
+df <- rbind(df, df2)
+df$Var2 <- as.character(df$Var2)
+idx <- order(df$Var2)
+df <- df[idx,]
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_on_timepoint0_precence_absence.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_time0_precense_absense.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+
+```{r Prob_distribution}
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+
+# Add an identifier column to each data frame
+prob_long_cor$Prediction <- "Correct"
+prob_long_wrong$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor, prob_long_wrong)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_histogram(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_week0_precense_absense.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+```{r unique_importance}
+Importance_ASV_fall_Time0_precense_absense.tbl <- importance
+
+```
+
+# Seasonal
+
+## Prediction on summer with training with fall
+
+```{r subseting_table}
+common_columns <- intersect(colnames(tab_rar_summer_ABCF), colnames(tab_rar_fall_ABCF))
+
+# Subset both tables to only the common columns
+tab_rar_summer_ABCF_subset <- tab_rar_summer_ABCF[, common_columns]
+tab_rar_fall_ABCF_subset <- tab_rar_fall_ABCF[, common_columns]
+```
+
+```{r predict_pilot}
+# Train and test data
+x_train <- tab_rar_fall_ABCF_subset
+y_train <- as.factor(metaData_fall_ABCF$place)  # target for training
+x_test <- tab_rar_summer_ABCF_subset
+y_test <- as.factor(metaData_summer_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F")
+colnames(a) <- c("A", "C", "F")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+print("Result matrix for fall sample prediction:")
+print(a)
+print(paste('Total nb of predicted samples:', b, sep=" "))
+print(paste('Nb of correctly predicted samples', c, sep=" "))
+print(paste('Proportion of correctly predicted samples', d, sep=" "))
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[seed]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")   
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+summer_prediction_fall_training_info <- data.frame(
+  Test = "summer soil samples",
+  Train = "fall soil samples",
+  Approach = " ",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info, summer_prediction_fall_training_info)
+```
+
+```{r conf_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_ABCF$place)
+
+# Create a data frame with Var1, Var2 filled with "Q", and Freq filled with 0
+df2 <- data.frame(
+  Var1 = Var1,             # First column
+  Var2 = rep("B", length(Var1)),  # Second column with "Q"
+  Freq = rep(0, length(Var1))     # Third column with 0s
+)
+df <- rbind(df, df2)
+df$Var2 <- as.character(df$Var2)
+idx <- order(df$Var2)
+df <- df[idx,]
+head(df$Var2)
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_TestSummer_TrainFall <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location", , title = "A") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_summer_prediction_with_fall_training.png", width = 1800, height = 1000)
+print(conf_matrix_TestSummer_TrainFall)
+dev.off()
+
+```
+
+
+```{r probability_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 30),  # Global text size
+    axis.title = element_text(size = 30),  # Axis titles
+    axis.text = element_text(size = 30),  # Axis text
+    legend.title = element_text(size = 30),  # Legend title
+    legend.text = element_text(size = 30)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_predicting_summer_training_fall_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+```{r importance}
+Importance_ASV_summer_training_fall_all.tbl <- importance
+
+```
+
+
+### Precence abcence pred:
+
+```{r predict_pilot}
+tab_rar_summer_ABCF_subset[tab_rar_summer_ABCF_subset > 0] <- 1
+tab_rar_fall_ABCF_subset[tab_rar_fall_ABCF_subset > 0] <- 1
+
+# Train and test data
+x_train <- tab_rar_fall_ABCF_subset
+y_train <- as.factor(metaData_fall_ABCF$place)  # target for training
+x_test <- tab_rar_summer_ABCF_subset
+y_test <- as.factor(metaData_summer_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F")
+colnames(a) <- c("A", "C", "F")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[seed]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")   
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+summer_prediction_fall_training_pres_abs_info <- data.frame(
+  Test = "summer soil samples",
+  Train = "fall soil samples",
+  Approach = "Presence/absence",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info, summer_prediction_fall_training_pres_abs_info)
+```
+
+
+```{r conf_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_ABCF$place)
+
+# Create a data frame with Var1, Var2 filled with "Q", and Freq filled with 0
+df2 <- data.frame(
+  Var1 = Var1,             # First column
+  Var2 = rep("B", length(Var1)),  # Second column with "Q"
+  Freq = rep(0, length(Var1))     # Third column with 0s
+)
+df <- rbind(df, df2)
+df$Var2 <- as.character(df$Var2)
+idx <- order(df$Var2)
+df <- df[idx,]
+head(df$Var2)
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location", , title = "A") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_summer_prediction_with_fall_training_presence_absence_plot.png", width = 1800, height = 1000)
+print(conf_matrix)
+dev.off()
+
+```
+
+
+```{r probability_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 30),  # Global text size
+    axis.title = element_text(size = 30),  # Axis titles
+    axis.text = element_text(size = 30),  # Axis text
+    legend.title = element_text(size = 30),  # Legend title
+    legend.text = element_text(size = 30)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_predicting_summer_training_fall_Pres_abs_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+
+```{r importance}
+Importance_ASV_fall_training_with_summer_pres_abs.tbl <- importance
+```
+
+### Variable selection pred
+
+```{r making_subsets}
+asv_freq <- as.data.frame(table(Importance_ASV_summer_training_fall_all.tbl$ASV))
+sorted_asv_freq <- asv_freq[order(-asv_freq$Freq), ]
+```
+
+```{r}
+tab_rar_summer_ABCF_subset <- tab_rar_summer_ABCF[, common_columns]
+tab_rar_fall_ABCF_subset <- tab_rar_fall_ABCF[, common_columns]
+```
+
+```{r}
+# Finding the common entries
+print(length(intersect(sorted_asv_freq$Var1, colnames(tab_rar_summer_ABCF_subset))))
+```
+
+
+```{r Finding_best_accuracy}
+VS_across_season_summer_pred_info <- data.frame()
+for (n_top_asvs in seq(10, 1000, by = 10)) {
+  
+  # Select top n ASVs
+  top_ASVs <- head(sorted_asv_freq, n_top_asvs)
+  selected_ASVs <- as.character(top_ASVs$Var1)
+  
+
+tab_summer <- tab_rar_summer_ABCF_subset[, colnames(tab_rar_summer_ABCF_subset) %in% selected_ASVs]
+tab_fall <- tab_rar_fall_ABCF_subset[, colnames(tab_rar_fall_ABCF_subset) %in% selected_ASVs]
+
+
+# Train and test data
+x_train <- tab_fall
+y_train <- as.factor(metaData_fall_ABCF$place)# target for training
+x_test <- tab_summer
+y_test <- as.factor(metaData_summer_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")    
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+VS_season_temp_info <- data.frame(
+    Model = paste0("Top_", n_top_asvs, "_ASVs"),
+    Accuracy = d,
+    Features = ncol(x_train),
+    Incorrect_Predicted_samples = paste0(incorrect_predictions$sample_id, collapse = ", "),
+    Incorrect_Predicted_samples_freq = paste0(incorrect_predictions$freq, collapse = ", "),
+    Predicted_as = paste0(incorrect_predictions$predicted_label, collapse = ", "),
+    prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability)
+  )
+  
+  VS_across_season_summer_pred_info <- rbind(VS_across_season_summer_pred_info, VS_season_temp_info)
+}
+```
+
+
+```{r}
+# Create the scatter plot
+ggplot(VS_across_season_summer_pred_info, aes(x = Features, y = Accuracy)) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_line(color = "steelblue", linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    title = "Model Accuracy vs Number of Features",
+    x = "Number of Features (ASVs)",
+    y = "Prediction Accuracy" )
+```
+
+```{r predict_pilot}
+top_ASVs <- head(sorted_asv_freq,  VS_across_season_summer_pred_info$Features[which.max(VS_across_season_summer_pred_info$Accuracy)])
+selected_ASVs <- as.character(top_ASVs$Var1)
+
+# Subset the feature table
+tab_rar_summer_ABCF_subset <- tab_rar_summer_ABCF[,colnames(tab_rar_summer_ABCF) %in% selected_ASVs]
+tab_rar_fall_ABCF_subset <- tab_rar_fall_ABCF[,colnames(tab_rar_fall_ABCF) %in% selected_ASVs]
+
+# Train and test data
+x_train <- tab_rar_fall_ABCF_subset
+y_train <- as.factor(metaData_fall_ABCF$place)  # target for training
+x_test <- tab_rar_summer_ABCF_subset
+y_test <- as.factor(metaData_summer_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F")
+colnames(a) <- c("A", "C", "F")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[seed]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")   
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+summer_prediction_fall_training_pres_abs_info <- data.frame(
+  Test = "summer soil samples",
+  Train = "fall soil samples",
+  Approach = "Feature selction",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info, summer_prediction_fall_training_pres_abs_info)
+```
+
+
+```{r conf_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_ABCF$place)
+
+# Create a data frame with Var1, Var2 filled with "Q", and Freq filled with 0
+df2 <- data.frame(
+  Var1 = Var1,             # First column
+  Var2 = rep("B", length(Var1)),  # Second column with "Q"
+  Freq = rep(0, length(Var1))     # Third column with 0s
+)
+df <- rbind(df, df2)
+df$Var2 <- as.character(df$Var2)
+idx <- order(df$Var2)
+df <- df[idx,]
+head(df$Var2)
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location", , title = "A") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_summer_prediction_with_fall_training_VS_plot.png", width = 1800, height = 1000)
+print(conf_matrix)
+dev.off()
+
+```
+
+
+## Predicting fall samples while training with summer
+```{r predict_pilot}
+# Subset both tables to only the common columns
+tab_rar_summer_ABCF_subset <- tab_rar_summer_ABCF[, common_columns]
+tab_rar_fall_ABCF_subset <- tab_rar_fall_ABCF[, common_columns]
+
+# Train and test data
+x_train <- tab_rar_summer_ABCF_subset
+y_train <-   as.factor(metaData_summer_ABCF$place)# target for training
+x_test <- tab_rar_fall_ABCF_subset
+y_test <- as.factor(metaData_fall_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F")
+colnames(a) <- c("A","B","C", "F")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+print("Result matrix for fall sample prediction:")
+print(a)
+print(paste('Total nb of predicted samples:', b, sep=" "))
+print(paste('Nb of correctly predicted samples', c, sep=" "))
+print(paste('Proportion of correctly predicted samples', d, sep=" "))
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+```
+
+
+```{r prediction_info}
+# Importance
+Importance_ASV_fall_classification_with_summer_training.tbl <- unique(importance)
+
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_prediction_summer_training_info <- data.frame(
+  Test = "fall soil samples",
+  Train = "summer soil samples",
+  Approach = " ",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info, fall_prediction_summer_training_info)
+```
+
+```{r conf_matrix}
+df <- as.data.frame(as.table(a))
+# Calculate the row-wise sums
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_TestFall_TrainSummer <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location", , title = "B") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_with_summer_training.png", width = 1800, height = 1000)
+print(conf_matrix_TestFall_TrainSummer)
+dev.off()
+```
+
+```{r}
+# Figure 5
+
+Cross_seasonal_conf_matrixes <- conf_matrix_TestSummer_TrainFall + conf_matrix_TestFall_TrainSummer + plot_layout(axes = "collect")
+png("results/Cross_seasonal_conf_matrixes.png", width = 900, height = 500)
+print(Cross_seasonal_conf_matrixes)
+dev.off()
+```
+
+
+### Predicting fall samples while training with summer presence/absence
+```{r predict_pilot}
+tab_rar_summer_ABCF_subset[tab_rar_summer_ABCF_subset > 0] <- 1
+tab_rar_fall_ABCF_subset[tab_rar_fall_ABCF_subset > 0] <- 1
+
+
+# Train and test data
+x_train <- tab_rar_summer_ABCF_subset
+y_train <-   as.factor(metaData_summer_ABCF$place)# target for training
+x_test <- tab_rar_fall_ABCF_subset
+y_test <- as.factor(metaData_fall_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F")
+colnames(a) <- c("A","B","C", "F")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+print("Result matrix for fall sample prediction:")
+print(a)
+print(paste('Total nb of predicted samples:', b, sep=" "))
+print(paste('Nb of correctly predicted samples', c, sep=" "))
+print(paste('Proportion of correctly predicted samples', d, sep=" "))
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+```
+
+
+```{r prediction_info}
+# Importance
+Importance_ASV_fall_classification_with_summer_training.tbl <- unique(importance)
+
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_prediction_summer_training_info <- data.frame(
+  Test = "fall soil samples",
+  Train = "summer soil samples",
+  Approach = "presence/absence ",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info, fall_prediction_summer_training_info)
+```
+
+```{r conf_matrix}
+df <- as.data.frame(as.table(a))
+# Calculate the row-wise sums
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_prediction_on_summer_tFALL <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location", , title = "B") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_with_summer_training_pres_abs.png", width = 1800, height = 1000)
+print(conf_matrix_prediction_on_summer_tFALL)
+dev.off()
+```
+
+### Predicting fall while training with summer - Variable selection
+```{r making_subsets}
+asv_freq <- as.data.frame(table(Importance_ASV_fall_classification_with_summer_training.tbl$ASV))
+sorted_asv_freq <- asv_freq[order(-asv_freq$Freq), ]
+```
+
+```{r}
+tab_rar_summer_ABCF_subset <- tab_rar_summer_ABCF[, common_columns]
+tab_rar_fall_ABCF_subset <- tab_rar_fall_ABCF[, common_columns]
+```
+
+```{r}
+# Finding the common entries
+print(length(intersect(sorted_asv_freq$Var1, colnames(tab_rar_summer_ABCF_subset))))
+```
+
+
+```{r predict_fall}
+VS_across_season_fall_pred_info <- data.frame()
+for (n_top_asvs in seq(10, 1000, by = 10)) {
+  
+  # Select top n ASVs
+  top_ASVs <- head(sorted_asv_freq, n_top_asvs)
+  selected_ASVs <- as.character(top_ASVs$Var1)
+  
+
+tab_summer <- tab_rar_summer_ABCF_subset[, colnames(tab_rar_summer_ABCF_subset) %in% selected_ASVs]
+tab_fall <- tab_rar_fall_ABCF_subset[, colnames(tab_rar_fall_ABCF_subset) %in% selected_ASVs]
+
+
+# Train and test data
+x_train <- tab_summer
+y_train <- as.factor(metaData_summer_ABCF$place)# target for training
+x_test <- tab_fall
+y_test <- as.factor(metaData_fall_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")    
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+VS_season_temp_info <- data.frame(
+    Model = paste0("Top_", n_top_asvs, "_ASVs"),
+    Accuracy = d,
+    Features = ncol(x_train),
+    Incorrect_Predicted_samples = paste0(incorrect_predictions$sample_id, collapse = ", "),
+    Incorrect_Predicted_samples_freq = paste0(incorrect_predictions$freq, collapse = ", "),
+    Predicted_as = paste0(incorrect_predictions$predicted_label, collapse = ", "),
+    prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability)
+  )
+  
+  VS_across_season_fall_pred_info <- rbind(VS_across_season_fall_pred_info, VS_season_temp_info)
+}
+```
+
+
+```{r}
+# Create the scatter plot
+ggplot(VS_across_season_fall_pred_info, aes(x = Features, y = Accuracy)) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_line(color = "steelblue", linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    title = "Model Accuracy vs Number of Features",
+    x = "Number of Features (ASVs)",
+    y = "Prediction Accuracy" )
+```
+
+```{r predict_pilot}
+# Subset both tables to only the common columns
+top_ASVs <- head(sorted_asv_freq,  VS_across_season_fall_pred_info$Features[which.max(VS_across_season_fall_pred_info$Accuracy)])
+selected_ASVs <- as.character(top_ASVs$Var1)
+
+# Subset the feature table
+tab_rar_summer_ABCF_subset <- tab_rar_summer_ABCF[,colnames(tab_rar_summer_ABCF) %in% selected_ASVs]
+tab_rar_fall_ABCF_subset <- tab_rar_fall_ABCF[,colnames(tab_rar_fall_ABCF) %in% selected_ASVs]
+
+# Train and test data
+x_train <- tab_rar_summer_ABCF_subset
+y_train <-   as.factor(metaData_summer_ABCF$place)# target for training
+x_test <- tab_rar_fall_ABCF_subset
+y_test <- as.factor(metaData_fall_ABCF$place) 
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+# Loop over seeds from 1 to 10
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[seed]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F")
+colnames(a) <- c("A","B","C", "F")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+print("Result matrix for fall sample prediction:")
+print(a)
+print(paste('Total nb of predicted samples:', b, sep=" "))
+print(paste('Nb of correctly predicted samples', c, sep=" "))
+print(paste('Proportion of correctly predicted samples', d, sep=" "))
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+```
+
+
+```{r prediction_info}
+# Importance
+Importance_ASV_fall_classification_with_summer_training.tbl <- unique(importance)
+
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+
+fall_prediction_summer_training_info <- data.frame(
+  Test = "fall soil samples",
+  Train = "summer soil samples",
+  Approach = "Feature selection",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info, fall_prediction_summer_training_info)
+```
+
+```{r conf_matrix}
+df <- as.data.frame(as.table(a))
+# Calculate the row-wise sums
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_prediction_on_summer_tFALL <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location", , title = "B") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_with_summer_training_VS.png", width = 1800, height = 1000)
+print(conf_matrix_prediction_on_summer_tFALL)
+dev.off()
+```
+
+
+
+# Fabric prediction
+
+## Fabric summer
+```{r}
+common_columns <- intersect(colnames(tab_rar_summer_mF), colnames(tab_rar_summer_fabric))
+
+# Subset both tables to only the common columns
+tab_rar_summer_mF_subset <- tab_rar_summer_mF[, common_columns]
+tab_rar_summer_fabric_subset <- tab_rar_summer_fabric[, common_columns]
+
+# Train and test data
+x_train <- tab_rar_summer_mF_subset  # feature matrix for training
+y_train <- as.factor(metaData_summer_mF$place)  # target for training
+x_test <- tab_rar_summer_fabric_subset  # feature matrix for testing
+y_test <- as.factor(metaData_summer_fabric$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+  # Train the Random Forest model
+    # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "E", "F", "G")
+colnames(a) <- c("A", "B", "C", "E", "F", "G")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")    
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+```
+
+```{r prediction_info}
+
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+summer_fabric_prediction_info <- data.frame(
+  Test = "summer fabric samples",
+  Train = "summer soil samples",
+  Approach = "", 
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , summer_fabric_prediction_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_summer_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_summer_prediction_on_fabric.png", width = 1800, height = 1000)
+print(conf_matrix_summer_prediction_on_fabric)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_summer_fabric_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+
+```{r unique_importance}
+Importance_ASV_summer_fabric.tbl <- importance
+```
+
+
+
+## Fabric Fall
+
+```{r}
+common_columns <- intersect(colnames(tab_rar_fall_mF), colnames(tab_rar_fall_fabric))
+
+# Subset both tables to only the common columns
+tab_rar_fall_mF_subset <- tab_rar_fall_mF[, common_columns]
+tab_rar_fall_fabric_subset <- tab_rar_fall_fabric[, common_columns]
+
+# Train and test data
+x_train <- tab_rar_fall_mF_subset  # feature matrix for training
+y_train <- as.factor(metaData_fall_mF$place)  # target for training
+x_test <- tab_rar_fall_fabric_subset  # feature matrix for testing
+y_test <- as.factor(metaData_fall_fabric$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+  # Train the Random Forest model
+    # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+
+# Print results
+print("Result matrix for fall sample prediction:")
+print(a)
+print(paste('Total number of predicted samples:', b, sep=" "))
+print(paste('Number of correctly predicted samples:', c, sep=" "))
+print(paste('Proportion of correctly predicted samples:', d, sep=" "))
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")    
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_fabric_prediction_info <- data.frame(
+  Test = "fall fabric samples",
+  Train = "fall soil samples",
+  Approach = "", 
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , fall_fabric_prediction_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+
+Var1 <- unique(metaData_fall_mF$place)
+
+# Create a data frame with Var1, Var2 filled with "Q", and Freq filled with 0
+df2 <- data.frame(
+  Var1 = Var1,             # First column
+  Var2 = rep("Q", length(Var1)),  # Second column with "Q"
+  Freq = rep(0, length(Var1))     # Third column with 0s
+)
+df <- rbind(df, df2)
+df$Var2 <- as.character(df$Var2)
+idx <- order(df$Var2)
+df <- df[idx,]
+
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_prediction_on_fabric.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_fabric_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+
+```{r unique_importance}
+Importance_ASV_fall_fabric.tbl <- importance
+```
+
+
+
+## prediction of fabric from fall with variables selected as important during fall soil prediction -finding highest accuracy
+
+
+```{r}
+asv_freq <- as.data.frame(table(importance_ASV_fall_soil_samples.tbl$ASV))
+sorted_asv_freq <- asv_freq[order(-asv_freq$Freq), ]
+
+VS_fabric_info <- data.frame()
+
+for (n_top_asvs in seq(10, 1000, by = 10)) {
+  
+  # Select top n ASVs
+  top_ASVs <- head(sorted_asv_freq, n_top_asvs)
+  selected_ASVs <- as.character(top_ASVs$Var1)
+  
+  common_columns <- intersect(colnames(tab_rar_fall_mF), colnames(tab_rar_fall_fabric))
+
+# Subset both tables to only the common columns
+tab_rar_fall_mF_subset <- tab_rar_fall_mF[, common_columns]
+tab_rar_fall_fabric_subset <- tab_rar_fall_fabric[, common_columns]
+
+tab_rar_fall_mF_subset <- tab_rar_fall_mF_subset[, colnames(tab_rar_fall_mF_subset) %in% selected_ASVs]
+tab_rar_fall_fabric_subset <- tab_rar_fall_fabric_subset[, colnames(tab_rar_fall_fabric_subset) %in% selected_ASVs]
+
+# Train and test data
+x_train <- tab_rar_fall_mF_subset  # feature matrix for training
+y_train <- as.factor(metaData_fall_mF$place)  # target for training
+x_test <- tab_rar_fall_fabric_subset  # feature matrix for testing
+y_test <- as.factor(metaData_fall_fabric$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+  # Train the Random Forest model
+    # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")    
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+
+
+  VS_fabric_temp_info <- data.frame(
+    Model = paste0("Top_", n_top_asvs, "_ASVs"),
+    Accuracy = d,
+    Features = ncol(x_train),
+    Incorrect_Predicted_samples = paste0(incorrect_predictions$sample_id, collapse = ", "),
+    Incorrect_Predicted_samples_freq = paste0(incorrect_predictions$freq, collapse = ", "),
+    Predicted_as = paste0(incorrect_predictions$predicted_label, collapse = ", "),
+    prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability)
+  )
+  
+  VS_fabric_info <- rbind(VS_fabric_info, VS_fabric_temp_info)
+}
+```
+
+```{r}
+
+# Create the scatter plot with a horizontal line at y = 0.876923076923077
+ggplot(VS_fabric_info, aes(x = Features, y = Accuracy)) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_line(color = "steelblue", linetype = "dashed") +
+  geom_hline(yintercept = 0.876923076923077, color = "red", linetype = "solid") + # Add this line
+  theme_minimal() +
+  labs(
+    title = "Model Accuracy vs Number of Features",
+    x = "Number of Features (ASVs)",
+    y = "Prediction Accuracy"
+  )
+
+```
+
+
+## improving fabric fall pred
+
+
+```{r}
+common_columns <- intersect(colnames(tab_rar_fall_mF), colnames(tab_rar_fall_fabric))
+
+# Subset both tables to only the common columns
+tab_rar_fall_mF_subset <- tab_rar_fall_mF[, common_columns]
+tab_rar_fall_fabric_subset <- tab_rar_fall_fabric[, common_columns]
+
+tab_rar_fall_mF_subset <- tab_rar_fall_mF_subset[, colnames(tab_rar_fall_mF_subset) %in% selected_ASVs_fall_soil]
+tab_rar_fall_fabric_subset <- tab_rar_fall_fabric_subset[, colnames(tab_rar_fall_fabric_subset) %in% selected_ASVs_fall_soil]
+
+# Train and test data
+x_train <- tab_rar_fall_mF_subset  # feature matrix for training
+y_train <- as.factor(metaData_fall_mF$place)  # target for training
+x_test <- tab_rar_fall_fabric_subset  # feature matrix for testing
+y_test <- as.factor(metaData_fall_fabric$place)  # target for testing (assuming first letter of row names)
+
+# Initialize containers
+y_predTotal <- data.frame()
+prob_list <- list()
+incorrect_predictions <- data.frame()
+importance <- data.frame()  # Container for importance information
+noise <- data.frame()  # Container for noise variables (negative MeanDecreaseAccuracy)
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (seed in 1:5) {
+  set.seed(seed)  # Set the seed
+  
+  # Train the Random Forest model
+    # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  # Can adjust num.trees
+                           mtry = floor(ncol(x_train)/6),  # Number of variables to consider at each split
+                           importance = TRUE, num.threads = parallel::detectCores() - 1)
+  
+  # Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+
+  # Get probabilities for the test set
+  prob <- predict(rf_model, x_test, type = "prob")
+  prob_list[[seed]] <- prob
+
+  # Collect incorrect predictions
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs
+      true_label = y_test[incorrect_idx],
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+  
+  # Extract variable importance from the rf_model object directly
+  importance_matrix <- as.data.frame(rf_model$importance)
+  importance_matrix$ASV <- rownames(importance_matrix)  # Add ASV names
+  importance_matrix$seed <- seed  # Add seed value
+  
+# Sort by MeanDecreaseAccuracy and get top
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  # Most informative variables
+  importance <- rbind(importance, top_importance)  # Append to the importance table
+  
+# Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[seed] <- length(unique(noise$ASV))
+unique_importance_count[seed]<- length(unique(importance$ASV))
+}
+
+# Summarize predictions
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J","K", "L", "N", "P", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c / b
+print(a)
+# Print results
+print(paste('Proportion of correctly predicted samples:', d, sep=" "))
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")    
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_fabric_prediction_VS_info <- data.frame(
+  Test = "fall fabric samples",
+  Train = "fall soil samples",
+  Approach = "Feature selection",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+prediction_info <- rbind(prediction_info , fall_fabric_prediction_VS_info)
+```
+
+```{r confusion_matrix}
+df <- as.data.frame(as.table(a))
+Var1 <- unique(metaData_fall_mF$place)
+
+# Create a data frame with Var1, Var2 filled with "Q", and Freq filled with 0
+df2 <- data.frame(
+  Var1 = Var1,             # First column
+  Var2 = rep("Q", length(Var1)),  # Second column with "Q"
+  Freq = rep(0, length(Var1))     # Third column with 0s
+)
+df <- rbind(df, df2)
+df$Var2 <- as.character(df$Var2)
+idx <- order(df$Var2)
+df <- df[idx,]
+head(df$Var2)
+
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_fall_prediction_on_fabric <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 22),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_fall_fabric_VS.png", width = 1800, height = 1000)
+print(conf_matrix_fall_prediction_on_fabric)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_fabric_plot_VS.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+
+```{r investigating_noise}
+unique_noise_df <- data.frame(
+  seed = 1:20,  # Seed numbers from 1 to 20
+  unique_count = unique_noise_count  # The unique noise counts
+)
+print(unique_noise_count)
+```
+
+
+# Variable selection based on Importance
+
+
+
+
+## Investigating the important ASVs
+
+```{r}
+
+tab_rar_mF_fall_pres_abs <- tab_rar_fall_mF
+tab_rar_mF_fall_pres_abs[tab_rar_mF_fall_pres_abs > 0] <- 1
+
+# Calculate the sums of each column
+precense <- as.data.frame(colSums(tab_rar_mF_fall_pres_abs))
+colnames(precense) <- "nRows"
+precense <- precense %>%
+  mutate(Importance = ifelse(rownames(precense) %in% importance_ASV_fall_soil_samples.tbl$ASV, "Important", "Not Important"))
+
+
+ggplot(precense, aes(x = Importance, y = nRows)) +
+  geom_boxplot() +
+  labs(title = "Box Plot of Mean Bray-Curtis by Variation",
+       x = "Variation",
+       y = "Mean Bray-Curtis") +
+  theme_minimal()
+mean(precense$nRows)
+one <- filter(precense, Importance == "Important")
+two <- filter(precense, Importance == "Not Important")
+
+min(one$nRows)
+wilcox.test(one$nRows, two$nRows, alternative = "two.sided")
+min(one$nRows)
+max(one$nRows)
+abundance <- as.data.frame(colSums(tab_rar_fall_mF))
+colnames(abundance) <- "nRows"
+abundance <- abundance %>%
+  mutate(Importance = ifelse(rownames(abundance) %in% importance_ASV_fall_soil_samples.tbl$ASV, "Important", "Not Important"))
+
+
+ggplot(abundance, aes(x = Importance, y = nRows)) +
+  geom_boxplot() +
+  labs(title = "",
+       x = "Asvs separated by if they are marked as important or not by random forest",
+       y = "Scaled read counts") +
+  theme_minimal()
+one <- filter(abundance, Importance == "Important")
+two <- filter(abundance, Importance == "Not Important")
+wilcox.test(one$nRows, two$nRows, alternative = "two.sided")
+
+```
+
+
+```{r}
+
+tab_rar_summer_pres_abs <- tab_rar_summer
+tab_rar_summer_pres_abs[tab_rar_summer_pres_abs > 0] <- 1
+
+# Calculate the sums of each column
+precense <- as.data.frame(colSums(tab_rar_summer_pres_abs))
+colnames(precense) <- "nRows"
+precense <- precense %>%
+  mutate(Importance = ifelse(rownames(precense) %in% unique(Importance_ASV_summer_all.tbl$ASV), "Important", "Not Important"))
+
+unique(Importance_ASV_summer_all.tbl$ASV)
+ggplot(precense, aes(x = Importance, y = nRows)) +
+  geom_boxplot() +
+  labs(title = "Box Plot of Mean Bray-Curtis by Variation",
+       x = "Variation",
+       y = "Mean Bray-Curtis") +
+  theme_minimal()
+mean(precense$nRows)
+one <- filter(precense, Importance == "Important")
+two <- filter(precense, Importance == "Not Important")
+
+min(one$nRows)
+wilcox.test(one$nRows, two$nRows, alternative = "two.sided")
+min(one$nRows)
+mean(one$nRows)
+
+abundance <- as.data.frame(colSums(tab_rar_summer))
+colnames(abundance) <- "nRows"
+abundance <- abundance %>%
+  mutate(Importance = ifelse(rownames(abundance) %in% Importance_ASV_summer_all.tbl$ASV, "Important", "Not Important"))
+
+
+ggplot(abundance, aes(x = Importance, y = nRows)) +
+  geom_boxplot() +
+  labs(title = "",
+       x = "Asvs separated by if they are marked as important or not by random forest",
+       y = "Scaled read counts") +
+  theme_minimal()
+one <- filter(abundance, Importance == "Important")
+two <- filter(abundance, Importance == "Not Important")
+wilcox.test(one$nRows, two$nRows, alternative = "two.sided")
+min(one$nRows)
+mean(abundance$nRows)
+```
+
+
+```{r}
+# Step 1: Get unique lengths
+length_fall <- length(unique(importance_ASV_fall_soil_samples.tbl$ASV))
+length_summer <- length(unique(Importance_ASV_summer_all.tbl$ASV))
+
+# Step 2: Generate random subsets
+set.seed(123)  # Setting a seed for reproducibility
+random_subset_fall <- sample(colnames(tab_rar_fall_mF), length_fall, replace = FALSE)
+random_subset_summer <- sample(colnames(tab_rar_summer), length_summer, replace = FALSE)
+
+# Step 3: Calculate the intersections
+original_intersect_length <- length(unique(intersect(importance_ASV_fall_soil_samples.tbl$ASV, unique(Importance_ASV_summer_all.tbl$ASV))))
+random_intersect_length <- length(unique(intersect(random_subset_fall, random_subset_summer)))
+
+# Step 4: Compare lengths
+if (original_intersect_length > random_intersect_length) {
+  print("The original intersection is longer than the random subset intersection.")
+} else {
+  print("The random subset intersection is longer than or equal to the original intersection.")
+}
+
+```
+
+```{r}
+set.seed(123)  # For reproducibility
+
+# Number of permutations
+n_permutations <- 1000
+random_intersect_lengths <- numeric(n_permutations)
+
+# Step 1: Get the original intersection length
+original_intersect_length <- length(unique(intersect(
+  importance_ASV_fall_soil_samples.tbl$ASV, 
+  unique(Importance_ASV_summer_all.tbl$ASV)
+)))
+
+# Step 2: Generate random subsets and calculate intersection lengths
+for (i in 1:n_permutations) {
+  random_subset_fall <- sample(colnames(tab_rar_fall_mF), length_fall, replace = FALSE)
+  random_subset_summer <- sample(colnames(tab_rar_summer), length_summer, replace = FALSE)
+  
+  # Calculate the intersection length
+  random_intersect_lengths[i] <- length(unique(intersect(random_subset_fall, random_subset_summer)))
+}
+print(random_intersect_lengths)
+# Step 3: Calculate the p-value
+p_value <- mean(random_intersect_lengths >= original_intersect_length)
+
+# Result output
+cat("Original intersection length:", original_intersect_length, "\n")
+cat("Mean of random intersect lengths:", mean(random_intersect_lengths), "\n")
+cat("P-value:", p_value, "\n")
+
+if (p_value < 0.05) {
+    cat("The original intersection is significantly larger than expected by chance (p < 0.05).\n")
+} else {
+    cat("The original intersection is not significantly larger than expected by chance (p >= 0.05).\n")
+}
+
+```
+
+
+```{r prediction_of_fall_soil_samples}
+tab_rar_mF_fall_pres_abs_subset <- tab_rar_mF_fall_pres_abs[, colSums(tab_rar_mF_fall_pres_abs) > 3]
+
+tab_rar_fall_mF_subset <- tab_rar_fall_mF[colnames(tab_rar_fall_mF) %in% colnames(tab_rar_mF_fall_pres_abs_subset)]
+
+# Calculate the total abundance of each feature
+total_abundance <- colSums(tab_rar_fall_mF)
+head(total_abundance)
+# Calculate the 90th percentile threshold
+threshold <- quantile(total_abundance, 0.5)
+
+# Subset the data frame to keep only features above the threshold
+abundance_subset <- tab_rar_fall_mF[, total_abundance < threshold]
+
+
+tab_rar_fall_mF_subset_1 <- tab_rar_fall_mF_subset[!(colnames(tab_rar_fall_mF_subset) %in% colnames(abundance_subset))]
+
+
+# Define feature matrix (X) and target vector (y)
+X <- tab_rar_fall_mF_subset_1
+y <- as.factor(metaData_fall_mF$place)
+
+
+folds_combined <- list()
+for (i in 1:20) {
+  set.seed(i)  # Set seed to the current value of i
+  folds_combined <- c(folds_combined, createFolds(y, k = 5, list = TRUE, returnTrain = TRUE))
+}
+
+
+# Containers needed for collecting prediction info
+y_predTotal <- data.frame()
+prob_list <- list()  
+incorrect_predictions <- data.frame() 
+importance <- data.frame()  
+noise <- data.frame()  
+unique_noise_count <- numeric()
+unique_importance_count <- numeric()
+
+for (i in 1:25){ # Each sample is predicted 5 times
+  set.seed(2)
+  train_index <- unlist(folds_combined[[i]]) 
+  x_train <- X[train_index, ]
+  x_test <- X[-train_index, ]
+  y_train <- y[train_index]
+  y_test <- y[-train_index]
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(x = x_train, y = y_train, num.trees = 200,  
+                           mtry = floor(ncol(x_train)/6),  
+                           num.threads = parallel::detectCores() - 1, 
+                           importance = TRUE)
+# Predict on the test set
+  y_pred <- predict(rf_model, x_test)
+  names(y_pred) <- NULL
+  y_predRes <- as.data.frame(cbind(y_pred, y_test))
+  y_predTotal <- rbind(y_predTotal, y_predRes)
+  
+prob <- predict(rf_model, x_test, type = "prob") # finding probability scores
+prob_list[[i]] <- prob  #saving the prob scores for each sample
+
+#saving which samples were incorrectly predicted and what they were predicted as
+  incorrect_idx <- which(y_pred != y_test)
+  if (length(incorrect_idx) > 0) {
+    incorrect_pred <- data.frame(
+      sample_id = rownames(x_test)[incorrect_idx],  # Add sample IDs here
+      true_label = y_test[incorrect_idx], 
+      predicted_label = y_pred[incorrect_idx]
+    )
+    incorrect_predictions <- rbind(incorrect_predictions, incorrect_pred)
+  }
+# Extract variable importance from the rf_model 
+  importance_matrix <- as.data.frame(rf_model$importance) # Importance score for each ASV
+  importance_matrix$ASV <-row.names(importance_matrix)
+  
+  # Sort by MeanDecreaseAccuracy and get top 
+  top_importance <- importance_matrix[order(-importance_matrix$MeanDecreaseAccuracy), ]  # Sort in descending order
+  top_importance <- top_importance[1:min(Variables_selected, nrow(top_importance)), ]  
+  importance <- rbind(importance, top_importance)  # save the top scoring ASVs
+  
+  # Identify variables with negative MeanDecreaseAccuracy
+  noise_vars <- importance_matrix[importance_matrix$MeanDecreaseAccuracy < 0, ]
+  noise <- rbind(noise, noise_vars)  # Append to the noise table
+
+unique_noise_count[i] <- length(unique(noise$ASV))
+unique_importance_count[i]<- length(unique(importance$ASV))
+}
+
+a <- table(y_predTotal$y_test, y_predTotal$y_pred)
+row.names(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+colnames(a) <- c("A", "B", "C", "F", "H", "I", "J", "K", "L", "N", "P", "Q", "R")
+b <- nrow(y_predTotal)
+c <- sum(y_predTotal$y_pred == y_predTotal$y_test)
+d <- c/b
+
+# Prediction probabilities for the training data
+prob <- do.call(rbind, lapply(1:length(prob_list), function(i) {
+  fold_prob <- prob_list[[i]]
+  data.frame(Sample = rownames(fold_prob), fold_prob, Fold = i)
+}))
+
+idx <- order(row.names(prob))
+prob <- prob[idx,]
+prob$place <- substring(row.names(prob),1,1)
+prob_long <- melt(prob, id.vars = c("Sample", "place", "Fold"),  
+                  variable.name = "predicted_place", 
+                  value.name = "Probability")  
+prob_long_cor <- prob_long[prob_long$place == prob_long$predicted_place, ]
+prob_long_wrong <- prob_long[prob_long$place != prob_long$predicted_place, ]# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+
+# inspecting incorrectly predicted samples
+incorrect_predictions <- incorrect_predictions %>%
+  group_by(sample_id) %>%   # Group by all unique columns
+  summarize(freq = n()) %>%  # Count occurrences for each unique group and add 'freq' column
+  ungroup()  # Ungroup to revert to standard dataframe
+
+```
+
+```{r prediction_info}
+always_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq == 5], collapse = ", ")
+intermittently_incorrect_ids <- paste(incorrect_predictions$sample_id[incorrect_predictions$freq < 5], collapse = ", ")
+
+fall_soil_prediction_info <- data.frame(
+  Test = "fall soil",
+  Train = "fall soil",
+  Approach = "cross-validation, -least abundant and least common",
+  Accuracy = round(d, 4), 
+  Features = ncol(x_train), 
+  prob_dif = mean(prob_long_cor$Probability) - mean(prob_long_wrong$Probability),
+  intermittently_incorrect = intermittently_incorrect_ids,
+  always_incorrect = always_incorrect_ids)
+
+prediction_info <- rbind(prediction_info , fall_soil_prediction_info)
+```
+
+```{r formating_confusion_matrix}
+df <- as.data.frame(as.table(a))
+# Calculate the row-wise sums
+row_sums <- aggregate(Freq ~ Var1, data = df, sum)
+
+# Join the summarized data back to the original dataframe
+df <- df %>%
+  left_join(row_sums, by = "Var1")
+
+df <- df %>% 
+  mutate(percent = round((Freq.x/Freq.y)*100)) %>%
+  dplyr::select(Var1, Var2, percent)
+
+df$Correct <- ifelse(df$percent == 0, "Zero",
+                     ifelse(df$Var1 == df$Var2, "Correct", "Incorrect"))
+# Reverse the order of the levels for the Y-axis (Var1) so the diagonal starts at the top-left
+df$Var1 <- factor(df$Var1, levels = rev(levels(df$Var1)))
+
+
+# Plot the confusion matrix with custom axis titles
+conf_matrix_soil_fall <- ggplot(df, aes(x = Var2, y = Var1, fill = Correct)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = percent), color = "black", size = 12) +  # Adjust text size
+  scale_fill_manual(
+    values = c("Correct" = "green", "Incorrect" = "red", "Zero" = "gray90"),
+    breaks = c("Correct", "Incorrect")  # Show only Correct and Incorrect in the legend
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    # You can remove the element_blank() for axis titles
+    axis.title.x = element_text(size = 22),  # Customize X-axis title font size
+    axis.title.y = element_text(size = 22),   # Customize Y-axis title font size
+  axis.text = element_text(size = 22),
+  plot.title = element_text(size = 30),
+    ) +
+  labs(x = "Classified Location", y = "Sample Origin Location") +  # Add custom axis titles
+  coord_fixed(ratio = 1)  + # Makes the cells square
+  theme(legend.position = "none") 
+
+png("results/conf_matrix_ASV_soil_fall_mostAbundant.png", width = 1800, height = 1000)
+print(conf_matrix_soil_fall)
+dev.off()
+```
+
+```{r Prob_distribution}
+prob_long$Model <- rep("Soil_fall", length(prob_long$Sample))
+prob_long_cor1 <- prob_long[prob_long$place == prob_long$predicted_place, ]
+
+# Create prob_long_wrong for rows where 'place' does not match 'predicted_place'
+prob_long_wrong1 <- prob_long[prob_long$place != prob_long$predicted_place, ]
+
+
+# Add an identifier column to each data frame
+prob_long_cor1$Prediction <- "Correct"
+prob_long_wrong1$Prediction <- "Incorrect"
+
+# Combine the data frames
+prob_long_combined <- rbind(prob_long_cor1, prob_long_wrong1)
+
+prob_distribution <- ggplot(prob_long_combined, aes(x = Probability, fill = Prediction)) +
+  geom_histogram(alpha = 0.5, bins = 200) +  # Use alpha for transparency
+  labs(title = "Distribution of Probabilities (Correct vs Incorrect Predictions)",
+       x = "Probability",
+       y = "Density") +
+  scale_fill_manual(values = c("Correct" = "skyblue", "Incorrect" = "salmon")) +
+  theme_minimal()
+png("results/probability_distribution_ASV_fall_most_abundant_soil.png", width = 1800, height = 1000)
+print(prob_distribution)
+dev.off()
+```
+
+```{r Prob_distribution_by_location}
+prob_plot <- ggplot(prob_long, aes(x = predicted_place, y = Probability, color = place)) +
+  geom_point(position = position_jitter(width = 0.1), size = 2) +
+  facet_wrap(~ place, scales = "free_x") +
+  labs(title = "Dot Plot of Probabilities by Sample and Class",
+       x = "Sample",
+       y = "Probability") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+    text = element_text(size = 20),  # Global text size
+    axis.title = element_text(size = 20),  # Axis titles
+    axis.text = element_text(size = 20),  # Axis text
+    legend.title = element_text(size = 20),  # Legend title
+    legend.text = element_text(size = 20)   # Legend text
+  )
+png("results/Probabilities_by_location_ASV_fall_soil_most_abundant_and_commonASVs_plot.png", width = 1800, height = 1000)
+print(prob_plot)
+dev.off()
+```
+```{r importance_ASVs}
+importance_ASV_fall_soil_samples.tbl <- importance
+```
+
+
+
+#Save prediction info
+
+```{r}
+write.table(prediction_info, prediction_info_file_out, sep = "\t")
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
