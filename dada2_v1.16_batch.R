@@ -57,7 +57,7 @@ track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, 
 colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
 rownames(track) <- sample.names
 print(track)
-write.table(track, "path_to_output_files/track_sequence_loss_table.txt", sep = "\t")
+write.table(track, "track_sequence_loss_table.txt", sep = "\t")
 
 
 taxa <- assignTaxonomy(seqtab.nochim, "path_to_downloaded_silva_database_files/silva/silva_nr99_v138.1_train_set.fa.gz", multithread=TRUE)
