@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --account=nn5017k
+#SBATCH --account="your_cluster_account"
 #SBATCH --time=03:00:00
 #SBATCH --job-name=dada2_RD
 #SBATCH --cpus-per-task=16
