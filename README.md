@@ -1,6 +1,8 @@
 These files are the data, scripts and information files needed to perform the analysis described in the article “Forensic Geolocalization of Norwegian Soil Samples by Applying Machine Learning to Microbiomes”. 
 -	The folder “fastq_files” contains the demultiplexed fasta files with the sequencing data. Files are named with the combination of named barcodes used for that sample. The files are trimmed and only the primers remain a part of the sequences. 
--	dada2_Rscript: the script used for dada2 processing
+-	dada2_slurm.sh: the script used to run the dada2 software in an R environment on a HPC. We use Sigma2 - the National Infrastructure for High-Performance Computing and
+Data Storage in Norway
+-dada2_v1.16_batch.R: The rscript used to do the dada2 processing of the sequence files to produce ASV tables and asign taxonomy using the silva reference databases. 
 -	A1_pm.txt: The placement of fall samples on the plate during the library preparation
 -	pm_pilot.txt: The placement of summer samples on the plate during the library preparation
 -	platemat.txt: The barcode combination used for each well in the plates during library preparation
