@@ -16,6 +16,7 @@ Data Storage in Norway
 The main steps:
 
 1. dada2_slurm.sh
+
 Input files:
 - files in "fastq_files" folder
 - dada2_v1.16_batch.R
