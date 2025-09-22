@@ -1,7 +1,7 @@
 #dada2 versjon kan kjores i R4.0 >
 library('dada2')
 packageVersion('dada2')
-path<-'/cluster/projects/nn5017k/microbiome/Host_2024_prover/all_samples'
+path<-'your_path_to_seqfiles'
 list.files(path)
 fnFs<-sort(list.files(path,pattern='_R1.fastq.gz',full.names=T))
 fnRs<-sort(list.files(path,pattern='_R2.fastq.gz',full.names=T))
