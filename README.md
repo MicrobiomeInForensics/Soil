@@ -23,6 +23,7 @@ Input files:
 dada2_slurm.sh is run in the HPC saga provided by Sigma2. This shell script runs the dada2_v1.16_batch.R script in an R environment. The script runs the software dada2 (https://benjjneb.github.io/dada2/tutorial.html).
 - To run the dada2_slurm.sh script in saga you need to change the account in line 2 to your account.
 - To run the script dada2_v1.16_batch.R you need to provide the path to your fasta files in line 4, and your path to the Silva database files in line 63 and 64.
+
 Output files:
 - track_sequence_loss_table.txt
 - dada2_tab.txt
@@ -31,6 +32,7 @@ Output files:
 It is also possible to directly run dada2_v1.16_batch.R in a local R environment
 
 2. Script_1_Filtering_and_naming.Rmd
+
 Input files:
 - dada2_tab.txt
 - dada2_taxonomy.txt
@@ -39,6 +41,7 @@ Input files:
 - pm_pilot.txt
 - A1_pm.txt
 - contamination.R
+
 Output:
 - tab.txt
 - taxonomy_filtered.txt
@@ -46,10 +49,12 @@ Output:
 - metaData.txt
 
 3. Script_2.1_Descriptive_plots.Rmd
+
 Input files:
 - tab.txt
 - taxonomy_filtered.txt
 - metaData.txt
+
 Main Output:
 - NMDS plots
 - PERMaNOVA tables
@@ -57,10 +62,12 @@ Main Output:
 - Abundance chart
 
 4. Script_2.2_Prediction.Rmd
+
 Input:
 - tab.txt
 - taxonomy_filtered.txt
 - metaData.txt
+
 Output:
 - Confusion matrixes for all predictions
 - Information table from all predictions
