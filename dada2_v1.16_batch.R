@@ -57,11 +57,11 @@ track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, 
 colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
 rownames(track) <- sample.names
 print(track)
-write.table(track, "/cluster/projects/nn5017k/microbiome/Host_2024_prover/all_samples/track_sequence_loss_table.txt", sep = "\t")
+write.table(track, "path_to_output_files/track_sequence_loss_table.txt", sep = "\t")
 
 
-taxa <- assignTaxonomy(seqtab.nochim, "/cluster/projects/nn5017k/microbiome/Host_2024_prover/A2_seqfiles/silva/silva_nr99_v138.1_train_set.fa.gz", multithread=TRUE)
-taxa <- addSpecies(taxa, "/cluster/projects/nn5017k/microbiome/Host_2024_prover/A2_seqfiles/silva/silva_species_assignment_v138.1.fa.gz")
+taxa <- assignTaxonomy(seqtab.nochim, "path_to_downloaded_silva_database_files/silva/silva_nr99_v138.1_train_set.fa.gz", multithread=TRUE)
+taxa <- addSpecies(taxa, "path_to_downloaded_silva_database_files/silva/silva_species_assignment_v138.1.fa.gz")
 taxa.print <- taxa # Removing sequence rownames for display only
 rownames(taxa.print) <- NULL
 print(taxa.print)
